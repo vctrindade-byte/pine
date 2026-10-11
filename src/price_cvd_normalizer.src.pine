@@ -460,7 +460,8 @@ rmsLag(float x, int m, int warm) =>
     [out, n0]
 
 // Classificação de cada intrabar, avaliada DENTRO do contexto do timeframe inferior (estado contínuo
-// de intrabar para intrabar). Devolve [delta pela regra da vela, delta BVC-Normal, volume].
+// de intrabar para intrabar). Devolve [delta pela regra da vela, delta BVC-Normal, volume]; o volume vem tal como o
+// fornecedor o dá (na = em falta, ≠ 0), para a regra das barras sem observação (6.5); os deltas usam nz(volume).
 //   Regra da vela (TradingView/ta v12): em 1T, cotações primeiro (≥ ask → +1; ≤ bid → −1; senão lado do
 //   ponto médio); depois fecho vs abertura; depois fecho vs fecho anterior; senão mantém o lado (nunca reinicia).
 //   BVC por intrabar (Easley-López de Prado-O'Hara 2012, adaptado): V·(2Φ(clip(ΔC/σ, ±10)) − 1), σ = stdev_100(ΔC).
@@ -476,7 +477,7 @@ ltfSigned(int sigLen) =>
     float dp    = session.isfirstbar or na(cPrev) ? close - open : close - cPrev  // guarda de gap no BVC
     float sg    = ta.stdev(dp, sigLen)                                          // calculado em todos os intrabars
     float z     = sg > 0 ? clip(dp / sg, 10.0) : 0.0
-    [dir * v, v * (2.0 * normCdf(z) - 1.0), v]
+    [dir * v, v * (2.0 * normCdf(z) - 1.0), volume]
 
 // Formatação de números para a tabela e os rótulos ("—" quando na), com o sinal menos tipográfico (−) do texto
 // fixo; um valor que arredonda para zero sai sem sinal.
@@ -633,7 +634,14 @@ else if useFp
     tier   := hiTier
 else if useLtf
     delta  := clsIn == Classifier.candle ? aCand.sum() : aBvc.sum()   // useLtf ⇒ nIntra > 0
-    barVol := aVol.sum()
+    // Volume dos intrabars: na se faltar em algum (a barra fica incompleta: volume em falta), senão a soma. Ciclo
+    // explícito: a referência v6 do array.sum só documenta o caso do array vazio, não o de elementos na.
+    float ivSum = 0.0
+    bool  ivNa  = false
+    for iv in aVol
+        ivNa  := ivNa or na(iv)
+        ivSum += nz(iv)
+    barVol := ivNa ? na : ivSum
     tier   := cfgTier
 else if fallbackIn == Fallback.bvc
     delta  := barDelta
@@ -643,9 +651,12 @@ else if fallbackIn == Fallback.bvc
 // fornecedor não o deu) ou nulo (sem negócios). Não é uma observação (r, Δ = 0): se entrasse em σ, ρ, Z e eventos
 // seria um falso «preço sem fluxo». Fica fora das estatísticas, não conta nem parte a sequência de qualidade e mantém
 // o tier anterior (sem marcas de transição). Linhas: fluxo nulo sem negócios; interrompidas com volume em falta.
-bool volMiss = tier > 0 and na(barVol)
-bool noTrade = tier > 0 and not na(barVol) and barVol == 0
-bool noObs   = volMiss or noTrade
+// Sem fonte nesta barra (qualidade 0, «Barras sem intrabars» = Nenhum) decide o volume do gráfico: uma barra sem
+// negócios não tem intrabars de 1S/1T nem footprint, e não deve partir a sequência como uma barra sem dados.
+float obsVol  = tier > 0 ? barVol : volume
+bool  volMiss = tier > 0 and na(barVol)
+bool  noTrade = not na(obsVol) and obsVol == 0
+bool  noObs   = volMiss or noTrade
 if noObs
     delta := volMiss ? na : 0.0
     tier  := tierP
@@ -718,8 +729,9 @@ float ud    = uOk ? udRaw : na
 int   ke      = math.min(math.max(1, math.round(evWinIn * 60.0 / tfSec)), math.max(1, math.floor(mIn / 20.0)))  // janela do evento
 int   life    = math.max(1, math.round(lifeIn * 60.0 / tfSec))      // vida máxima em barras
 
-// Z só quando as janelas σ/ρ de TODOS os termos das somas (K e ke) cabem inteiras em barras de qualidade ≥ média:
-// o termo mais antigo da soma K usa σ de [t−K+1−N, t−K]; com a deriva removida, a SMA_N recua mais N barras.
+// Z só quando as janelas σ/ρ de TODOS os termos das somas (K e ke) cabem inteiras em observações de qualidade ≥ média
+// (as janelas contam observações: as barras sem observação são saltadas): o termo mais antigo da soma K usa σ das
+// observações [t−K+1−N, t−K]; com a deriva removida, a SMA_N recua mais N observações.
 int   hqNeed  = nIn + math.max(kIn, ke) + (driftIn ? nIn : 0)
 bool  hqOk    = tier >= 2 and not noObs and hqRun >= hqNeed   // barra sem observação: sem D (não repete o anterior)
 
@@ -736,6 +748,8 @@ bool   calProv = nCalD <= mIn
 string calTxt  = calProv ? " · calibração provisória (" + str.tostring(nCalD) + "/" + str.tostring(mIn) + ")" : ""
 // Menos de ~20 somas K independentes no RMS: o Z é demasiado incerto para a intensidade plena no painel.
 bool   zWeak   = nCalD < 20 * kIn
+// Calibração de ≥ 2N valores: alertas de Z e frequência empírica (ver «Alertas de Z com histerese»).
+bool   zCalOk  = nCalD >= 2 * nIn
 
 float rhoMin  = math.max(rhoMinIn, tanhF(1.96 / math.sqrt(nIn - 3)))
 bool  gateOn  = hqOk and not na(rhoP) and rhoP >= rhoMin
@@ -744,17 +758,20 @@ float fLeg    = math.sum(ud, kIn) / math.sqrt(kIn)
 float lamOlsP = sdP > 0 and srP > 0 ? nz(rhoP) * srP / sdP : na    // bps por unidade de delta
 float lamSigP = sdP > 0 and srP > 0 ? srP / sdP : na
 
-// Frequência empírica dos extremos de Z NESTE símbolo e timeframe (barras fechadas). O Z é um score empírico de
-// divergência (soma K sobreposta, autocorrelada, caudas pesadas), não uma normal padrão: |Z| ≥ 2 não equivale a 4.6%.
-var int zN   = 0                                     // barras com Z definido
-var int zN1  = 0                                     // |Z| ≥ limiar
-var int zN2  = 0                                     // |Z| ≥ limiar forte
-var int zNG  = 0                                     // |Z| ≥ limiar com o gate aberto (os casos que podem alertar)
-if barstate.isconfirmed and not na(zDiv)
-    zN  += 1
-    zN1 += math.abs(zDiv) >= thrIn ? 1 : 0
-    zN2 += math.abs(zDiv) >= thr2In ? 1 : 0
-    zNG += gateOn and math.abs(zDiv) >= thrIn ? 1 : 0
+// Frequência empírica dos extremos de Z NESTE símbolo e timeframe (barras fechadas, só com a calibração de ≥ 2N valores
+// dos alertas de Z: antes disso os extremos são mais frequentes). O Z é um score empírico de divergência (soma K
+// sobreposta, autocorrelada, caudas pesadas), não uma normal padrão: |Z| ≥ 2 não equivale a 4.6%.
+var int zN   = 0                                     // barras com Z (calibração ≥ 2N)
+var int zN1  = 0                                     // ... e |Z| ≥ limiar
+var int zN2  = 0                                     // ... e |Z| ≥ limiar forte
+var int zNGo = 0                                     // ... e o gate aberto
+var int zNG  = 0                                     // ... e o gate aberto e |Z| ≥ limiar
+if barstate.isconfirmed and not na(zDiv) and zCalOk
+    zN   += 1
+    zN1  += math.abs(zDiv) >= thrIn ? 1 : 0
+    zN2  += math.abs(zDiv) >= thr2In ? 1 : 0
+    zNGo += gateOn ? 1 : 0
+    zNG  += gateOn and math.abs(zDiv) >= thrIn ? 1 : 0
 
 // Fonte efectiva desta barra (tabela e alertas).
 string srcTxt = srcIn == DeltaSrc.bar ? "barras do gráfico (BVC)" :
@@ -766,6 +783,11 @@ else if isFpSel and not useLtf                                                  
     srcTxt := fallbackIn == Fallback.bvc ? "sem footprint → BVC na barra" : "sem footprint → sem dados"       // @fp
 else if isFpSel                                                                                               // @fp
     srcTxt := "sem footprint → intrabar " + tfName(ltf)                                                       // @fp
+// Barra sem observação: a fonte não deu fluxo e a qualidade mostrada é a herdada da barra anterior.
+if noObs
+    srcTxt := (volMiss ? "volume em falta" : "sem negócios") + " (" + srcTxt + ")"
+string tierTxt  = (noObs ? "qualidade anterior: " : "") + tierShort(tier)     // célula da fonte
+string tierTxtL = (noObs ? "anterior: " : "") + tierName(tier)                // alert(): «qualidade anterior: alta»
 
 // Estado neutro da divergência (sinal de Z + perna dominante; direcção só pelo preço). Sem sinais: diz porquê e o que
 // fazer. stateTxt = texto completo (alertas e dica); stateShort = versão curta para a tabela (a tabela fica no canto
@@ -780,11 +802,11 @@ string stateTip = ""
 if srcIn == DeltaSrc.bar
     stateTxt := "Sem sinais: delta derivado do preço"
     stateTip := "Fonte «Só barras do gráfico»: o delta é estimado a partir do próprio preço (BVC na barra)."
-else if tier == 0
-    stateTxt := "Sem dados de delta nesta barra"
 else if noObs
     stateTxt := volMiss ? "Sem volume nesta barra (dados em falta)" : "Sem negócios nesta barra"
     stateTip := "Barra sem observação de fluxo: fica fora de σ, ρ, Z e dos eventos (não é um «preço sem fluxo»)."
+else if tier == 0
+    stateTxt := "Sem dados de delta nesta barra"
 else if tier == 1 and tickLike and (useLtf or useFp)
     stateTxt := "Sem sinais: volume de ticks (sem lado agressor)"
     stateTip := "Volume de ticks (declarado pelo fornecedor, ou FX à vista): conta negócios ou actualizações de " +
@@ -806,9 +828,9 @@ else if tier == 1
 else if na(zDiv)
     stateTxt := "Em aquecimento (" + str.tostring(math.min(hqRun, hqNeed) + math.min(dCnt, nIn)) + "/" +
          str.tostring(hqNeed + nIn) + ")"
-    stateTip := "Só " + str.tostring(hqRun) + " barras seguidas com qualidade ≥ média: são precisas " +
-         str.tostring(hqNeed) + " barras seguidas e depois " + str.tostring(nIn) + " valores de D. Para encurtar, " +
-         warmHint + "."
+    stateTip := "Só " + str.tostring(hqRun) + " observações seguidas com qualidade ≥ média (as barras sem negócios ou " +
+         "sem volume não contam nem partem a sequência): são precisas " + str.tostring(hqNeed) + " e depois " +
+         str.tostring(nIn) + " valores de D. Para encurtar, " + warmHint + "."
 else if not gateOn
     stateTxt := na(rhoP) ? "Gate fechado: ρ indisponível" : rhoP < 0 ? "Gate fechado: ρ negativo" :
          "Gate fechado: ρ = " + f2(rhoP) + " < " + f2(rhoMin)
@@ -994,29 +1016,34 @@ bool  pinned   = gateOn and zOk and math.abs(zF) >= pinIn and math.abs(zP) <= pi
 bool  absorbed = gateOn and zOk and ((math.abs(zF) >= zfIn and sF * zP <= 0) or pinned)
 bool  pwf      = gateOn and zOk and not absorbed and math.abs(zP) >= zfIn and sP * zF <= 0
 // Aglomerados por classe E por lado: começa um novo quando o lado muda (ex.: compras absorvidas e, na barra seguinte,
-// vendas absorvidas, comum com ke = 1) ou quando passaram mais de ke barras desde a última barra da mesma classe e do
-// mesmo lado (período refractário de ke barras, como a histerese dos alertas de Z: um mergulho de 1–2 barras do |zF|
-// abaixo do limiar não cria um evento novo nem substitui o pendente). Estado actualizado em todas as barras.
+// vendas absorvidas, comum com ke = 1) ou quando passaram mais de ke observações desde a última barra da mesma classe e
+// do mesmo lado (período refractário de ke observações, como a histerese dos alertas de Z: um mergulho de 1–2 barras do
+// |zF| abaixo do limiar não cria um evento novo nem substitui o pendente). Conta observações (barras com Δ válido), a
+// unidade da janela ke do zF/zP: uma sequência de barras sem observação não parte um aglomerado. Estado actualizado em
+// todas as barras.
+var int obsIdx = 0
+if not na(d)
+    obsIdx += 1
 int  absSide = absorbed ? (sF > 0 ? 1 : -1) : 0
 int  pinSide = pinned ? (sF > 0 ? 1 : -1) : 0
 int  pwfSide = pwf ? (sP > 0 ? 1 : -1) : 0
-var int absLastBar  = na
+var int absLastObs  = na
 var int absLastSide = 0
-var int pinLastBar  = na
+var int pinLastObs  = na
 var int pinLastSide = 0
-var int pwfLastBar  = na
+var int pwfLastObs  = na
 var int pwfLastSide = 0
-bool absNewCl = absorbed and not (absLastSide == absSide and not na(absLastBar) and bar_index - absLastBar <= ke)
-bool pinNewCl = pinned and not (pinLastSide == pinSide and not na(pinLastBar) and bar_index - pinLastBar <= ke)
-bool pwfNewCl = pwf and not (pwfLastSide == pwfSide and not na(pwfLastBar) and bar_index - pwfLastBar <= ke)
+bool absNewCl = absorbed and not (absLastSide == absSide and not na(absLastObs) and obsIdx - absLastObs <= ke)
+bool pinNewCl = pinned and not (pinLastSide == pinSide and not na(pinLastObs) and obsIdx - pinLastObs <= ke)
+bool pwfNewCl = pwf and not (pwfLastSide == pwfSide and not na(pwfLastObs) and obsIdx - pwfLastObs <= ke)
 if absorbed
-    absLastBar  := bar_index
+    absLastObs  := obsIdx
     absLastSide := absSide
 if pinned
-    pinLastBar  := bar_index
+    pinLastObs  := obsIdx
     pinLastSide := pinSide
 if pwf
-    pwfLastBar  := bar_index
+    pwfLastObs  := obsIdx
     pwfLastSide := pwfSide
 bool  tierEvOk = tier >= 3 or (tier == 2 and lowConfIn)
 bool  lowConf  = tier == 2
@@ -1402,11 +1429,12 @@ if tblIn and barstate.islast
              "para um dos lados. Considere ligar «Remover deriva do fluxo».\n"
     // Fonte, qualidade e avisos (linhas curtas: a tabela fica no canto do painel sobre as barras recentes); na versão
     // compacta a âncora vai para a dica (só aparece na célula quando é inválida, como aviso).
-    string srcCell = srcTxt + " · " + tierShort(tier) + (tblFull ? "\nâncora " + anchName : "") + (warnTxt == "" ? "" : "\n⚠ " + warnTxt)
+    string srcCell = srcTxt + " · " + tierTxt + (tblFull ? "\nâncora " + anchName : "") + (warnTxt == "" ? "" : "\n⚠ " + warnTxt)
     if tblFull
         tbl.cell(0, 0, "Fonte · qualidade", text_color = fg, text_size = tblSize, text_halign = text.align_left)
     tbl.cell(vc, 0, srcCell, text_color = tier <= 1 or warnTxt != "" ? C_WARN : fg, text_size = tblSize,
-         text_halign = text.align_left, tooltip = warnTip + "Qualidade: " + tierName(tier) + "\nIntrabars por barra · " +
+         text_halign = text.align_left, tooltip = warnTip + (noObs ? "Qualidade (a da barra " +
+         "anterior; esta barra não tem observação de fluxo): " : "Qualidade: ") + tierName(tier) + "\nIntrabars por barra · " +
          "cobertura: " + covTxt + "\nTipo de volume: " + vtTxt + "\nNAR desde a âncora " + anchName + ": " + fpct(nar) +
          "\nNAR do histórico: " + narHTxt + "\n" + covTip)
     // Z e estado (texto na cor do tema; o fundo da célula leva a cor do Z quando |Z| ≥ limiar). Na barra em curso o
@@ -1418,11 +1446,16 @@ if tblIn and barstate.islast
     string zLine1  = (tblFull ? "" : "Z ") + fs2(zDiv) + calLbl + (barstate.isconfirmed ? "" : " · barra em curso")
     string zAlTip  = nCalD < 2 * nIn and not na(zDiv) ? "\nAlertas de Z só com ≥ " + str.tostring(2 * nIn) + " valores de " +
          "calibração (agora " + str.tostring(nCalD) + ")." : ""
-    // Calibração observada neste gráfico (referência normal: |Z| ≥ 2 → 4.6%, ≥ 3 → 0.27%).
-    string zFreqTip = zN == 0 ? "" : "\nFrequência empírica neste gráfico (" + str.tostring(zN) + " barras com Z): |Z| ≥ " +
-         str.tostring(thrIn, "0.0") + " em " + str.tostring(100.0 * zN1 / zN, "0.0") + "%, ≥ " + str.tostring(thr2In, "0.0") +
-         " em " + str.tostring(100.0 * zN2 / zN, "0.00") + "%; com o gate aberto, " + str.tostring(100.0 * zNG / zN, "0.0") +
-         "%. O Z é um score empírico (uma normal daria 4.6% e 0.27% para 2 e 3)."
+    // Calibração observada neste gráfico (referência normal: |Z| ≥ 2 → 4.6%, ≥ 3 → 0.27%). Com o gate aberto a
+    // frequência é condicional: só as barras com o gate aberto no denominador.
+    string zGateTip = zNGo == 0 ? "; gate sempre fechado nessas barras" : "; com o gate aberto (" +
+         str.tostring(100.0 * zNGo / zN, "0.0") + "% dessas barras), |Z| ≥ " + str.tostring(thrIn, "0.0") + " em " +
+         str.tostring(100.0 * zNG / zNGo, "0.0") + "%"
+    string zFreqTip = zN == 0 ? "" : "\nFrequência empírica neste gráfico (" + str.tostring(zN) + " barras com Z e ≥ " +
+         str.tostring(2 * nIn) + " valores de calibração): |Z| ≥ " + str.tostring(thrIn, "0.0") + " em " +
+         str.tostring(100.0 * zN1 / zN, "0.0") + "%, ≥ " + str.tostring(thr2In, "0.0") + " em " +
+         str.tostring(100.0 * zN2 / zN, "0.00") + "%" + zGateTip + ". O Z é um score empírico (uma normal daria 4.6% e " +
+         "0.27% para 2 e 3)."
     if tblFull
         tbl.cell(0, rZ, "Z (K = " + str.tostring(kIn) + ") · estado", text_color = fg, text_size = tblSize, text_halign = text.align_left)
     tbl.cell(vc, rZ, zLine1 + "\n" + stateShort, text_color = gateOn and not na(zDiv) ? fg : mut, bgcolor = zCellBg,
@@ -1483,8 +1516,7 @@ if barstate.islast and cumVol == 0
 // perto de ρ mínimo: sem histerese o mesmo episódio repetia o alerta poucas barras depois.
 // Só com ≥ 2N valores de calibração (aquecimento de 2N do dossier §6.3): antes disso, em dados reais, |Z| ≥ 2 é ~1.3×
 // e |Z| ≥ 3 até ~1.6× mais frequente. Um cruzamento nessa fase desarma na mesma (o alerta não sai atrasado, a meio do
-// episódio).
-bool zCalOk  = nCalD >= 2 * nIn
+// episódio). zCalOk: secção 7.
 var bool upArmed = true
 var bool dnArmed = true
 bool crossUp = barstate.isconfirmed and gateOn and not na(zDiv) and zDiv >= thrIn and upArmed
@@ -1572,5 +1604,5 @@ if barstate.isconfirmed and (alZUp or alZDn or alAbs or alPinO or alPwf or alRes
         evMsg := evMsg + (evMsg == "" ? "" : " | ") + (pivTop ? "topo sem confirmação do fluxo" : "fundo sem confirmação do fluxo")
     alert(str.format("{0}:{1} {2} · {3}: {4} · Z = {5} · zF = {6} · zP = {7} · ρ = {8} · fonte: {9} · qualidade {10}{11}",
          syminfo.prefix, syminfo.ticker, tfName(timeframe.period), str.tostring(close, format.mintick), evMsg, fa2(zDiv),
-         fa2(zF), fa2(zP), fa2(rhoP), srcTxt, tierName(tier), tfSec >= 3600 ? " · " + NOTE_HTF : ""),
+         fa2(zF), fa2(zP), fa2(rhoP), srcTxt, tierTxtL, tfSec >= 3600 ? " · " + NOTE_HTF : ""),
          alert.freq_once_per_bar_close)

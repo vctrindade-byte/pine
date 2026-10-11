@@ -6,7 +6,8 @@ cálculos são causais: nenhum valor usa barras futuras.
 
 > **Aviso.** É uma ferramenta de análise estatística. Não é recomendação de investimento. As divergências e os eventos
 > que o indicador assinala são descritivos: em dados reais não se encontrou um efeito direccional robusto
-> (ver [Limitações](#limitações) e [docs/METODOLOGIA.md](docs/METODOLOGIA.md)).
+> (ver [Limitações](#limitações), [docs/METODOLOGIA.md](docs/METODOLOGIA.md) e o registo da auditoria externa em
+> [docs/AUDITORIA.md](docs/AUDITORIA.md)).
 
 ## Índice
 
@@ -34,15 +35,19 @@ O painel mostra duas linhas, ambas em zero no início de cada período de âncor
 
 Sobre as linhas, o indicador calcula:
 
-- uma estatística de divergência **Z**, calibrada empiricamente, que colore o preenchimento entre as linhas e pode
-  ser vista como histograma;
+- um **score empírico de divergência Z**, que colore o preenchimento entre as linhas e pode ser visto como
+  histograma. Não é o z-score de uma normal padrão: é uma soma sobreposta de K barras, autocorrelada e de caudas
+  pesadas, reescalada pelo seu RMS recente; em dados reais |Z| ≥ 2 ocorreu em cerca de 6% das barras e |Z| ≥ 3 em
+  1–1,6% (uma normal daria 4,6% e 0,27%);
 - **eventos** de janela curta (cerca de 15 minutos): fluxo absorvido, preço travado e preço sem fluxo. São marcados no
   gráfico principal com rótulos neutros e só ganham cor direccional depois de o preço os resolver;
 - uma **tabela** de estado: fonte e qualidade do delta, Z e estado, último evento.
 
 O delta de cada barra é estimado a partir de barras de um timeframe inferior (intrabars) ou, na edição Footprint, do
 footprint de volume da TradingView. A qualidade desse delta condiciona tudo, por isso o indicador classifica cada
-barra (alta, média, baixa) e só produz sinais com qualidade média ou alta.
+barra (alta, média, baixa) e só produz sinais com qualidade média ou alta. Essa classificação descreve a configuração
+dos dados (fonte, timeframe, classificador), não garante que o lado agressor foi observado (ver
+[Qualidade dos dados](#qualidade-dos-dados)).
 
 ## Porque normalizar em unidades-σ
 
@@ -148,7 +153,10 @@ Os outros modos (preço implícito pelo fluxo, janela móvel, z-score de níveis
 A tabela **compacta** (por omissão) tem três linhas: (1) fonte e qualidade, por exemplo «intrabar 1 s · regra da vela
 · alta», mais avisos com ⚠; (2) Z, com «cal. n/M» enquanto a calibração for provisória, e o estado; (3) último evento,
 idade e resolução. As dicas das células mostram a âncora, o NAR (rácio de agressão líquida = CVD/volume), a
-cobertura, o tipo de volume, ρ com IC 95%, R², λ e η; a versão **completa** mostra-os em 9 linhas. Avisos possíveis:
+cobertura, o tipo de volume, ρ com IC 95%, R², λ e η; a versão **completa** mostra-os em 9 linhas. A dica do Z mostra
+também a **frequência empírica** de |Z| ≥ limiar e ≥ limiar forte neste gráfico (barras fechadas com Z e calibração
+de pelo menos 2N valores) e, com o gate aberto, a parte dessas barras e a frequência de |Z| ≥ limiar entre elas: o Z
+é um score empírico e |Z| ≥ 2 não equivale aos 4,6% de uma normal. Avisos possíveis:
 «âncora inválida → Auto», «poucos intrabars», «volume de ticks» e «desequilíbrio persistente» (|NAR| ≥ 3% em todo o
 histórico de qualidade ≥ média: considere «Remover deriva do fluxo»).
 
@@ -202,9 +210,11 @@ qualidade alta por resolver: não há evidência revista por pares de uma direc�
 ### Divergência por pivots (opcional)
 
 Pivot de máximo do preço mais alto do que o anterior, com o CVD (lido na barra do pivot do preço) mais baixo em pelo
-menos 0,5 σΔ, pivots a 5–60 barras e ambos em qualidade ≥ média → «Topo sem confirmação do fluxo» (espelho: «Fundo
-sem confirmação do fluxo»). Só é conhecido R = 2 barras depois: o rótulo fica no pivot e o alerta sai na confirmação.
-Evidência fraca.
+menos 0,5 σΔ, pivots a 5–60 barras e nenhuma barra observada de qualidade baixa entre eles → «Topo sem confirmação do
+fluxo» (espelho: «Fundo sem confirmação do fluxo»). Só é conhecido R = 2 barras depois: o rótulo fica no pivot e o
+alerta sai na confirmação. Num gráfico histórico o rótulo aparece numa barra em que ainda não era conhecido; um
+backtest tem de entrar na barra de confirmação, nunca no pivot. O mesmo cuidado vale para as resoluções das
+absorções, acrescentadas ao rótulo só quando acontecem. Evidência fraca.
 
 ## Qualidade dos dados
 
@@ -214,6 +224,23 @@ Evidência fraca.
 | **Média (2)** | Outros intrabars abaixo do gráfico (1 minuto, 5S–45S, …) ou o classificador BVC | sim | sim | ocos, «baixa conf.» |
 | **Baixa (1)** | Intrabars não inferiores ao gráfico; BVC na barra (sem intrabars); volume de ticks declarado (`syminfo.volumetype` = "tick") ou FX à vista | sim, CVD esbatido | não | não |
 | **Sem dados (0)** | «Barras sem intrabars» = Nenhum, numa barra sem intrabars | interrompidas | não | não |
+
+**O que a qualidade é, e não é.** O nível é atribuído pela configuração dos dados: a fonte, o timeframe dos intrabars
+face ao do gráfico, o classificador e o tipo de volume declarado. Não é uma medição, barra a barra, de que o lado
+agressor foi observado: a TradingView não expõe as marcas de agressor da bolsa e todas as fontes são estimativas.
+Mesmo o footprint é classificado pela TradingView a partir da acção do preço intrabar e nunca foi comparado aqui com
+o delta verdadeiro; com 1S e a regra da vela, a correlação com o delta verdadeiro foi 0,90 num par cripto e 0,71 em
+acções. «Alta» quer dizer «a melhor configuração disponível», não «delta exacto».
+
+**Barras sem negócios ou sem volume.** Uma barra cujo volume, na fonte escolhida (gráfico com o BVC na barra, soma dos
+intrabars ou footprint), é zero (sem negócios) ou está em falta (o fornecedor não o deu) não é uma observação do fluxo:
+fica fora de σ, ρ, Z e dos eventos, não conta nem parte o aquecimento e mantém a qualidade da barra anterior. Sem
+negócios, as linhas continuam (fluxo 0); com volume em falta, interrompem-se. A tabela diz «Sem negócios nesta barra»
+ou «Sem volume nesta barra (dados em falta)» e marca a «qualidade anterior». Basta um intrabar sem volume para a barra
+contar como volume em falta; numa barra sem intrabars com «Barras sem intrabars» = Nenhum decide o volume do gráfico
+(zero → sem negócios). As linhas são níveis: se o preço se mover numa dessas barras, a linha do preço mostra-o, mas o
+Z não o conta. Até à auditoria externa, o volume em falta contava como 0, o teste usava o volume do gráfico e estas
+barras entravam nas estatísticas como observações (r, Δ = 0) ([docs/AUDITORIA.md](docs/AUDITORIA.md), ponto (a)).
 
 **Volume de ticks.** Só é detectado quando o fornecedor o declara (`syminfo.volumetype` = "tick") ou em FX à vista. CFD
 e outros símbolos com volume de ticks não declarado não são detectados e recebem a qualidade da fonte (média ou alta,
@@ -242,11 +269,11 @@ recente), as barras antigas não têm intrabars e usam a regra «Barras sem intr
 qualidade baixa). A transição fica marcada no fundo e as linhas reiniciam uma vez na primeira barra cuja janela σ/ρ
 está toda em dados finos.
 
-**Aquecimento.** O Z exige N + max(K, janela do evento) barras seguidas de qualidade ≥ média e depois N valores de
-D: cerca de 220 barras com os valores por omissão em 5 minutos (mais N com a remoção da deriva). Com 1S num gráfico de
-5 minutos (~330 barras cobertas com 100K intrabars), o Z só existe nas ~110 barras mais recentes, a calibração fica
-provisória e quase não há alertas históricos; em tempo real os alertas passam a disparar quando houver valores de
-calibração suficientes.
+**Aquecimento.** O Z exige N + max(K, janela do evento) observações seguidas (barras com negócios) de qualidade ≥
+média e depois N valores de D: cerca de 220 barras com os valores por omissão em 5 minutos (mais N com a remoção da
+deriva). Com 1S num gráfico de 5 minutos (~330 barras cobertas com 100K intrabars), o Z só existe nas ~110 barras mais
+recentes, a calibração fica provisória e quase não há alertas históricos; em tempo real os alertas passam a disparar
+quando houver valores de calibração suficientes.
 
 ## Parâmetros
 
@@ -285,9 +312,9 @@ calibração suficientes.
 | Horizonte da divergência (K) | 20 | Barras somadas na estatística D (5–50) |
 | Janela de calibração (M) | 1000 | RMS não centrado que calibra o Z (300–2000; recomendado ≥ 5N) |
 | Winsorizar unidades-σ em ± | 4,0 | Limita as unidades-σ de cada barra antes de somar (guarda contra caudas pesadas e impacto côncavo) |
-| Limiar \|Z\| | 2,0 | Marca divergência: cerca de 6% das barras em dados reais |
-| Limiar forte \|Z\| | 3,0 | Intensidade máxima do preenchimento: cerca de 1–1,6% das barras em dados reais |
-| ρ mínimo (gate) | 0,30 | Gate efectivo = max(este valor, tanh(1,96/√(N−3))); abaixo dele o Z fica cinzento e não há sinais |
+| Limiar \|Z\| | 2,0 | Marca divergência: cerca de 6% das barras em dados reais (não 4,6%: o Z não é normal). A dica do Z mostra a frequência neste gráfico |
+| Limiar forte \|Z\| | 3,0 | Intensidade máxima do preenchimento: cerca de 1–1,6% das barras em dados reais (não 0,27%) |
+| ρ mínimo (gate) | 0,30 | Gate efectivo = max(este valor, tanh(1,96/√(N−3))); abaixo dele o Z fica cinzento e não há sinais. Com 0 o gate não se desliga: fica o limite de Fisher (0,196 com N = 100) |
 
 ### Eventos
 
@@ -352,17 +379,23 @@ Regras:
    muito do que parece «divergência» é fluxo de ordens limite, funcionamento normal do mercado.
 2. **O delta é estimado.** Mesmo o footprint é classificado pela TradingView a partir da acção do preço intrabar, não
    das marcas de agressor da bolsa. Com intrabars de 1 minuto ou só com as barras do gráfico, a estimativa depende em
-   parte do próprio preço.
-3. **Não há vantagem direccional validada.** Nenhum estudo revisto por pares valida os retornos após divergência,
+   parte do próprio preço. A qualidade (alta, média, baixa) classifica a configuração dos dados; não garante o lado
+   agressor.
+3. **O Z é um score empírico, não uma probabilidade.** As barras com |Z| ≥ 2 vêm em blocos (a soma K é sobreposta) e
+   as caudas são mais pesadas do que as de uma normal; os limiares 2 e 3 são marcas convencionais. Os eventos de
+   absorção são hipóteses sobre o mecanismo: o mesmo padrão pode vir de impacto côncavo, de fluxo previsível, de preço
+   formado noutro mercado ou de erro de classificação ([docs/AUDITORIA.md](docs/AUDITORIA.md), pontos (b) e (f)).
+4. **Não há vantagem direccional validada.** Nenhum estudo revisto por pares valida os retornos após divergência,
    absorção ou exaustão do CVD. Nos nossos testes com dados reais, o Z não previu retornos; houve só uma ligeira
    continuação após absorção de 15 minutos, numa só bolsa e na própria amostra, que desapareceu com delta estimado de
-   1 minuto.
-4. **Calibração numa amostra estreita:** um par cripto à vista (BTCFDUSD, 4 meses) e simulações. Futuros do CME,
+   1 minuto. Os eventos do código final não foram testados contra retornos seguintes, MFE/MAE, controlos, custos nem
+   fora da amostra: o plano está em [docs/AUDITORIA.md](docs/AUDITORIA.md), ponto (i).
+5. **Calibração numa amostra estreita:** um par cripto à vista (BTCFDUSD, 4 meses) e simulações. Futuros do CME,
    acções, perpétuos e FX não estão validados. Em cripto, o CVD de uma bolsa inclui fluxo próprio dessa bolsa.
-5. **Cobertura, planos e tempo real.** Os limites de intrabars encurtam o histórico de 1S/1T; o comportamento do
+6. **Cobertura, planos e tempo real.** Os limites de intrabars encurtam o histórico de 1S/1T; o comportamento do
    footprint e de 1S/1T em cada plano não está totalmente documentado. Na barra em curso os valores são provisórios, e
    os dados intrabar e de footprint podem diferir entre histórico e tempo real.
-6. **Compilação.** Não havia acesso ao compilador da TradingView; o código foi verificado contra a documentação, com um
+7. **Compilação.** Não havia acesso ao compilador da TradingView; o código foi verificado contra a documentação, com um
    parser e com um runtime alternativo. Ver a lista de verificação em [docs/VALIDACAO.md](docs/VALIDACAO.md).
 
 ## Aviso legal
@@ -383,6 +416,7 @@ tools/build.py                        gera as duas edições; --check falha se e
 tests/                                harness de testes (PineTS) e o seu README
 docs/METODOLOGIA.md                   derivação completa, estatística, eventos, interpretação, bibliografia
 docs/VALIDACAO.md                     o que foi validado, como, com que resultados, e o que falta verificar
+docs/AUDITORIA.md                     registo da auditoria externa: avaliação, provas, alterações e testes em falta
 docs/research-dossier.md              dossier de investigação original (inglês)
 package.json, requirements-dev.txt    dependências dos testes (pinets 0.11.0; pynescript 0.3.0)
 ```
@@ -395,7 +429,7 @@ Requisitos: Node.js ≥ 20 e, para o teste de parse, Python 3 com `pynescript`.
 npm install                                    # instala o pinets 0.11.0
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt   # opcional: teste T2 (parse)
 python3 tools/build.py --check                 # as edições geradas coincidem com a fonte
-npm test                                       # T0–T11 nas duas edições (alguns minutos)
+npm test                                       # T0–T12 nas duas edições (alguns minutos)
 npm run test:quick                             # matriz reduzida
 ```
 

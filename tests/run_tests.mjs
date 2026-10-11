@@ -8,7 +8,7 @@ import { writeFileSync } from 'node:fs';
 import { Reporter } from './lib/report.mjs';
 import { Target, TARGETS, setTargetFile, targetPath } from './lib/harness.mjs';
 import { t1Build, t2Parse, t3Static } from './lib/tests_static.mjs';
-import { t0SelfCheck, t4Matrix, t4Footprint, t5Null, t6Detection, t7Invariants, t8Reference, t9Engine, t10NativeLtf, t11Timeframes, prefetch } from './lib/tests_runtime.mjs';
+import { t0SelfCheck, t4Matrix, t4Footprint, t5Null, t6Detection, t7Invariants, t8Reference, t9Engine, t10NativeLtf, t11Timeframes, t12VolumeIntegrity, prefetch } from './lib/tests_runtime.mjs';
 import { maxJobs } from './lib/pinets.mjs';
 
 function parseArgs(argv) {
@@ -81,8 +81,8 @@ async function main() {
   };
 
   // Lança já todas as execuções PineTS planeadas (workers em paralelo) enquanto T0–T3 correm.
-  const runtimeIds = ['T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11'].filter(want);
-  // T5–T11 em todas as edições pedidas (a Footprint tem o seu próprio motor/LTF/estatística por etiquetas @fp);
+  const runtimeIds = ['T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12'].filter(want);
+  // T5–T12 em todas as edições pedidas (a Footprint tem o seu próprio motor/LTF/estatística por etiquetas @fp);
   // a matriz T4 completa só na Standard (a Footprint tem a sua matriz de footprint).
   const statKeys = targetKeys;
   const matrixKeys = targetKeys.includes('std') ? ['std'] : targetKeys;
@@ -110,6 +110,7 @@ async function main() {
   await withTarget('T9', 'Motor de delta e tier de qualidade', (tc, t) => t9Engine(tc, t), { keys: statKeys });
   await withTarget('T10', 'LTF nativo sem stub (ltfSigned no contexto intrabar)', (tc, t) => t10NativeLtf(tc, t), { keys: statKeys });
   await withTarget('T11', 'Timeframes, âncoras e qualidade (1m/1h/D/W/1S, sessão personalizada)', (tc, t) => t11Timeframes(tc, t), { keys: statKeys });
+  await withTarget('T12', 'Integridade do volume (volume em falta ≠ volume 0; barras sem observação fora de σ/ρ/Z/eventos)', (tc, t) => t12VolumeIntegrity(tc, t), { keys: statKeys });
 
   const failed = rep.summary();
   if (args.json) { writeFileSync(args.json, JSON.stringify({ args, results: rep.toJSON() }, null, 2)); console.log(`relatório JSON: ${args.json}`); }

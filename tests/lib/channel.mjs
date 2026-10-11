@@ -8,9 +8,16 @@
 // openTime nunca muda a barra de calendário: timeframe.change("1D"/"1W"/"1M") e session.isfirstbar
 // continuam correctos (verificado com o PineTS 0.11.0 — ver tests/README.md).
 // A barra-base (sem ms) tem de estar alinhada ao segundo.
+//
+// Volume dos intrabars: o do gráfico quando o gráfico tem volume; STUB_NA_VOL quando o volume do gráfico está em falta
+// (na). Assim o harness consegue representar uma barra cujo volume do gráfico falta mas cujos intrabars têm negócios
+// (o indicador tem de avaliar a falta de volume na FONTE escolhida, não no gráfico; T12). Volume 0 no gráfico → volume 0
+// nos intrabars (o stub não representa «gráfico 0, intrabars > 0»; a edição Footprint testa-o com o footprint).
 
 export const NO_INTRABARS = 999;
 export const Q_SCALE = 499;
+/** Volume total dos intrabars do stub numa barra cujo volume do gráfico é na. */
+export const STUB_NA_VOL = 100;
 
 /** Quantiza um rácio q ∈ [−1, 1] no código de ms (0..998). */
 export function encodeQ(q) {
@@ -24,11 +31,16 @@ export function decodeQ(code) {
   return code / Q_SCALE - 1;
 }
 
-/** Delta exactamente igual ao que o stub Pine produz: nz(volume) · (code/499 − 1). */
+/** Volume total dos intrabars do stub (NaN = barra sem intrabars): o do gráfico, ou STUB_NA_VOL se esse for na. */
+export function stubVol(code, volume) {
+  if (code === NO_INTRABARS) return NaN;
+  return Number.isFinite(volume) ? volume : STUB_NA_VOL;
+}
+
+/** Delta exactamente igual ao que o stub Pine produz: stubVol · (code/499 − 1). */
 export function stubDelta(code, volume) {
   if (code === NO_INTRABARS) return NaN;
-  const v = Number.isFinite(volume) ? volume : 0;
-  return v * decodeQ(code);
+  return stubVol(code, volume) * decodeQ(code);
 }
 
 /**
@@ -53,7 +65,7 @@ export function stubPineSource() {
     '// [harness] stub de request.security_lower_tf: delta verdadeiro decodificado de time % 1000',
     `${STUB_FN_NAME}() =>`,
     '    int __c = time % 1000',
-    '    float __v = nz(volume)',
+    `    float __v = na(volume) ? ${STUB_NA_VOL.toFixed(1)} : volume`,
     `    float __d = __v * (__c / ${Q_SCALE}.0 - 1.0)`,
     `    array<float> __a = array.from(${parts('__d')})`,
     `    array<float> __b = array.from(${parts('__d', STUB_BVC_SCALE)})`,

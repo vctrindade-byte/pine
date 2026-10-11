@@ -1,10 +1,13 @@
 // Reimplementação JS de referência de docs/METODOLOGIA.md §3.1 (rBar), §3.3 e §6 (σ, ρ, unidades-σ, D, RMS desfasado,
-// Z, gate, pernas) — independente do Pine. Usada no T7/T8 para comparar com a saída do indicador no PineTS.
-// Convenções Pine: ta.stdev é o desvio-padrão POPULACIONAL (biased = true); x[1] é o valor da barra anterior;
-// ATENÇÃO: aqui as janelas são estritas (NaN se houver um na na janela). No Pine (docs da TradingView e PineTS 0.11.0)
-// math.sum/ta.sma/ta.stdev/ta.correlation SALTAM os na (usam os últimos `length` valores não-na). Os resultados só
-// coincidem enquanto Δ não tiver na a meio do histórico — é o caso de todos os conjuntos do T8 (o fallback «Nenhum»,
-// que produz Δ = na, não é comparado aqui).
+// Z, gate, pernas) — independente do Pine. Usada no T7/T8/T12 para comparar com a saída do indicador no PineTS.
+// Convenções Pine: ta.stdev é o desvio-padrão POPULACIONAL (biased = true); x[1] é o valor da barra anterior.
+// Janelas: como no Pine (docs da TradingView de math.sum/ta.correlation; PineTS 0.11.0 também em ta.sma/ta.stdev),
+// math.sum/ta.sma/ta.stdev/ta.correlation SALTAM os na: usam os últimos `length` valores não-na e dão na enquanto
+// houver menos do que `length`. Numa barra com x = na o valor é o da última barra com x válido. Na correlação a
+// referência salta os PARES com um na (o Pine salta os na de cada média em separado: é o mesmo enquanto r e Δ forem na
+// nas mesmas barras, que é o caso: r = na(d) ? na : rBar).
+// Barras sem observação de fluxo (noObs: volume da fonte em falta ou nulo; ver refEngine) ficam fora de σ, ρ, das
+// somas, de D/Z/zF/zP e da sequência de qualidade (hqRun conta observações válidas), como no indicador.
 // O mesmo algoritmo foi reimplementado em Python, fora do repositório, para a validação com dados reais
 // (docs/VALIDACAO.md, secção 3).
 
@@ -13,40 +16,63 @@ export const REF_DEFAULTS = Object.freeze({ N: 100, K: 20, M: 1000, clip: 4.0, r
 
 const isF = Number.isFinite;
 
-/** Desvio-padrão populacional numa janela deslizante de n (NaN se houver NaN na janela). */
+/**
+ * Para cada barra t, os índices dos últimos n valores válidos (ok(j) verdadeiro) até t, ou null se houver menos de n
+ * (janela «salta os na» do Pine). Devolve um array: barra → índices (o mais antigo primeiro) ou null.
+ */
+function skipNaWindows(len, ok, n) {
+  const pos = [];
+  const out = new Array(len).fill(null);
+  for (let t = 0; t < len; t++) {
+    if (ok(t)) pos.push(t);
+    if (pos.length >= n) out[t] = pos.slice(pos.length - n);
+  }
+  return out;
+}
+
+/** Desvio-padrão populacional dos últimos n valores válidos (na saltados; NaN com menos de n). */
 export function rollingStdPop(x, n) {
   const out = new Float64Array(x.length).fill(NaN);
-  for (let t = n - 1; t < x.length; t++) {
-    let s = 0, s2 = 0, ok = true;
-    for (let j = t - n + 1; j <= t; j++) { const v = x[j]; if (!isF(v)) { ok = false; break; } s += v; }
-    if (!ok) continue;
+  const win = skipNaWindows(x.length, (t) => isF(x[t]), n);
+  for (let t = 0; t < x.length; t++) {
+    const w = win[t];
+    if (!w) continue;
+    let s = 0, s2 = 0;
+    for (const j of w) s += x[j];
     const m = s / n;
-    for (let j = t - n + 1; j <= t; j++) s2 += (x[j] - m) ** 2;
+    for (const j of w) s2 += (x[j] - m) ** 2;
     out[t] = Math.sqrt(s2 / n);
   }
   return out;
 }
 
+/** Correlação de Pearson dos últimos n pares válidos (pares com um na saltados). */
 export function rollingCorr(x, y, n) {
   const out = new Float64Array(x.length).fill(NaN);
-  for (let t = n - 1; t < x.length; t++) {
-    let sx = 0, sy = 0, ok = true;
-    for (let j = t - n + 1; j <= t; j++) { if (!isF(x[j]) || !isF(y[j])) { ok = false; break; } sx += x[j]; sy += y[j]; }
-    if (!ok) continue;
+  const win = skipNaWindows(x.length, (t) => isF(x[t]) && isF(y[t]), n);
+  for (let t = 0; t < x.length; t++) {
+    const w = win[t];
+    if (!w) continue;
+    let sx = 0, sy = 0;
+    for (const j of w) { sx += x[j]; sy += y[j]; }
     const mx = sx / n, my = sy / n;
     let cxy = 0, cxx = 0, cyy = 0;
-    for (let j = t - n + 1; j <= t; j++) { const a = x[j] - mx, b = y[j] - my; cxy += a * b; cxx += a * a; cyy += b * b; }
+    for (const j of w) { const a = x[j] - mx, b = y[j] - my; cxy += a * b; cxx += a * a; cyy += b * b; }
     out[t] = cxx > 0 && cyy > 0 ? cxy / Math.sqrt(cxx * cyy) : NaN;
   }
   return out;
 }
 
+/** Soma dos últimos n valores válidos (math.sum: na saltados; NaN com menos de n). */
 export function rollingSum(x, n) {
   const out = new Float64Array(x.length).fill(NaN);
-  for (let t = n - 1; t < x.length; t++) {
-    let s = 0, ok = true;
-    for (let j = t - n + 1; j <= t; j++) { if (!isF(x[j])) { ok = false; break; } s += x[j]; }
-    if (ok) out[t] = s;
+  const win = skipNaWindows(x.length, (t) => isF(x[t]), n);
+  for (let t = 0; t < x.length; t++) {
+    const w = win[t];
+    if (!w) continue;
+    let s = 0;
+    for (const j of w) s += x[j];
+    out[t] = s;
   }
   return out;
 }
@@ -107,29 +133,40 @@ export function computeRBar(open, close, openTime, sigLen = 100) {
 
 /**
  * Estatísticas de METODOLOGIA §3.3 e §6 a partir de rBar, delta e tier por barra.
- * hqOk: tier ≥ 2 há ≥ hqNeed barras seguidas, hqNeed = N + max(K, ke) (+ N com deriva): as janelas σ/ρ desfasadas
- * de TODOS os termos das somas K e ke ficam inteiras em barras de qualidade ≥ média (METODOLOGIA §6.4).
- * @returns objecto com séries Float64Array: r, d, sr, sd, rho, srP, sdP, rhoP, ur, ud, hqOk, D, rmsD, Z, gate, pLeg, fLeg,
- *          fE, pE, zF, zP (eventos, METODOLOGIA §7.1), lamOls e eta (η, eficiência de impacto)
+ * noObs (opcional): barras sem observação de fluxo (volume da fonte em falta ou nulo; ver refEngine). Ficam fora de σ, ρ,
+ * das somas K/ke e de D (Δ e r = na nessas barras), não contam nem partem a sequência de qualidade e não têm D/Z/zF/zP.
+ * delta: o delta da barra como o indicador o mostra (0 sem negócios, na com volume em falta).
+ * hqOk: tier ≥ 2 há ≥ hqNeed OBSERVAÇÕES seguidas, hqNeed = N + max(K, ke) (+ N com deriva): as janelas σ/ρ desfasadas
+ * de TODOS os termos das somas K e ke ficam inteiras em observações de qualidade ≥ média (METODOLOGIA §6.4).
+ * @returns objecto com séries Float64Array: r, d, sr, sd, rho, srP, sdP, rhoP, ur, ud, hqRun, hqOk, D, rmsD, Z, gate, pLeg,
+ *          fLeg, fE, pE, zF, zP (eventos, METODOLOGIA §7.1), lamOls, eta (η, eficiência de impacto) e dDisp (incremento
+ *          das linhas: 0 nas barras sem negócios, na com volume em falta)
  */
-export function computeRef({ rBar, delta, tier, opts = {} }) {
+export function computeRef({ rBar, delta, tier, noObs = null, opts = {} }) {
   const o = { ...REF_DEFAULTS, ...opts };
   const warm = o.warm ?? o.N;
   const n = rBar.length;
-  const d = Float64Array.from(delta, (v) => (isF(v) ? v : NaN));
+  const obs = (t) => !(noObs && noObs[t]);
+  // d = Δ observado (sem a remoção da deriva; o T7 verifica a deriva à parte); r alinhado com d
+  const d = Float64Array.from(delta, (v, t) => (isF(v) && obs(t) && isF(rBar[t]) ? v : NaN));
   const r = new Float64Array(n);
   for (let t = 0; t < n; t++) r[t] = isF(d[t]) ? rBar[t] : NaN;
+  const dDisp = Float64Array.from(d, (v, t) => (!obs(t) && isF(delta[t]) && isF(rBar[t]) ? 0 : v));
   const sr = rollingStdPop(r, o.N), sd = rollingStdPop(d, o.N), rho = rollingCorr(r, d, o.N);
   const srP = lag1(sr), sdP = lag1(sd), rhoP = lag1(rho);
   const ur = new Float64Array(n).fill(NaN), ud = new Float64Array(n).fill(NaN);
   for (let t = 0; t < n; t++) {
-    if (srP[t] > 0 && isF(r[t])) ur[t] = clipv(r[t] / srP[t], o.clip);
-    if (sdP[t] > 0 && isF(d[t])) ud[t] = clipv(d[t] / sdP[t], o.clip);
+    // uOk: as duas pernas válidas (o indicador põe ambas a na se uma faltar)
+    if (srP[t] > 0 && isF(r[t]) && sdP[t] > 0 && isF(d[t])) { ur[t] = clipv(r[t] / srP[t], o.clip); ud[t] = clipv(d[t] / sdP[t], o.clip); }
   }
-  const hqOk = new Uint8Array(n);
+  const hqOk = new Uint8Array(n), hqRun = new Int32Array(n);
   let run = 0;
   const hqNeed = o.hqNeed ?? (o.N + Math.max(o.K, o.ke) + (o.drift ? o.N : 0));
-  for (let t = 0; t < n; t++) { run = tier[t] >= 2 ? run + 1 : 0; hqOk[t] = tier[t] >= 2 && run >= hqNeed ? 1 : 0; }
+  for (let t = 0; t < n; t++) {
+    if (obs(t)) run = tier[t] >= 2 ? run + 1 : 0;
+    hqRun[t] = run;
+    hqOk[t] = tier[t] >= 2 && obs(t) && run >= hqNeed ? 1 : 0;
+  }
   const diff = new Float64Array(n);
   for (let t = 0; t < n; t++) diff[t] = ur[t] - ud[t];
   const sumU = rollingSum(diff, o.K), sumP = rollingSum(ur, o.K), sumF = rollingSum(ud, o.K);
@@ -162,17 +199,47 @@ export function computeRef({ rBar, delta, tier, opts = {} }) {
     const sD = isF(sumDKe[t]) ? sumDKe[t] : 0;
     if (isF(fE[t]) && Math.abs(fE[t]) >= 1.5 && isF(lamOls[t]) && lamOls[t] !== 0 && sD !== 0) eta[t] = sumRKe[t] / (lamOls[t] * sD);
   }
-  return { r, d, sr, sd, rho, srP, sdP, rhoP, ur, ud, hqOk, D, rmsD, Z, gate, pLeg, fLeg, rhoMin, hqNeed, fE, pE, zF, zP, lamOls, eta };
+  return { r, d, dDisp, sr, sd, rho, srP, sdP, rhoP, ur, ud, hqRun, hqOk, D, rmsD, Z, gate, pLeg, fLeg, rhoMin, hqNeed, fE, pE, zF, zP, lamOls, eta };
 }
 
-/** Delta do fallback BVC na barra (METODOLOGIA §2.5): nz(volume)·(2Φ(clip(rBar/σ_{t−1}, ±10)) − 1). */
+/** Delta do fallback BVC na barra (METODOLOGIA §2.5): volume·(2Φ(clip(rBar/σ_{t−1}, ±10)) − 1); na com volume na. */
 export function computeBarDelta(rBar, volume, sigLen = 100) {
   const sBarP = lag1(rollingStdPop(rBar, sigLen));
   return Float64Array.from(rBar, (rb, t) => {
     const z = sBarP[t] > 0 ? clipv(rb / sBarP[t], 10) : 0;
-    const v = isF(volume[t]) ? volume[t] : 0;
-    return v * (2 * normCdf(z) - 1);
+    return volume[t] * (2 * normCdf(z) - 1); // volume NaN → NaN (em falta ≠ 0)
   });
+}
+
+/**
+ * Motor de delta e qualidade por barra (indicador, 6.5; METODOLOGIA §2): fonte fina quando a barra a tem
+ * (fine[t] = { delta, vol, tier }: intrabars ou footprint), senão o fallback BVC na barra (volume do gráfico, tier 1)
+ * ou nada (fallback "Nenhum": delta na, tier 0). Depois, a regra de integridade do volume, avaliada no volume da
+ * FONTE escolhida: em falta (na) → volMiss; nulo → noTrade; em ambos a barra não é observação (noObs): delta na/0 e
+ * tier = tier da barra anterior. Sem fonte nenhuma (tier 0) decide o volume do gráfico: nulo → noTrade (uma barra sem
+ * negócios não tem intrabars); em falta → continua a ser uma barra sem dados (tier 0, parte a sequência).
+ * @param fine     array (por barra) de { delta, vol, tier } ou null quando a fonte fina não tem a barra
+ * @param barDelta delta BVC na barra (computeBarDelta; na com volume do gráfico na)
+ * @param chartVol volume do gráfico (NaN = em falta)
+ * @param fallback 'bvc' | 'none'; barOnly = fonte «Só barras do gráfico» (BVC em todas as barras, tier 1)
+ */
+export function refEngine({ fine, barDelta, chartVol, fallback = 'bvc', barOnly = false }) {
+  const n = barDelta.length;
+  const delta = new Float64Array(n).fill(NaN), barVol = new Float64Array(n).fill(NaN), tier = new Float64Array(n);
+  const volMiss = new Uint8Array(n), noTrade = new Uint8Array(n), noObs = new Uint8Array(n);
+  for (let t = 0; t < n; t++) {
+    const f = barOnly ? null : fine[t];
+    if (f) { delta[t] = f.delta; barVol[t] = f.vol; tier[t] = f.tier; }
+    else if (barOnly || fallback === 'bvc') { delta[t] = barDelta[t]; barVol[t] = chartVol[t]; tier[t] = 1; }
+    else tier[t] = 0;
+    // sem fonte (tier 0, fallback "Nenhum"): decide o volume do gráfico (uma barra sem negócios não tem intrabars)
+    const obsVol = tier[t] > 0 ? barVol[t] : chartVol[t];
+    volMiss[t] = tier[t] > 0 && !isF(barVol[t]) ? 1 : 0;
+    noTrade[t] = isF(obsVol) && obsVol === 0 ? 1 : 0;
+    noObs[t] = volMiss[t] || noTrade[t] ? 1 : 0;
+    if (noObs[t]) { delta[t] = volMiss[t] ? NaN : 0; tier[t] = t > 0 ? tier[t - 1] : 0; }
+  }
+  return { delta, barVol, tier, volMiss, noTrade, noObs };
 }
 
 /** Φ por Abramowitz–Stegun 7.1.26 (o mesmo que o indicador usa). */
@@ -187,11 +254,12 @@ export function normCdf(z) {
  * Referência de ltfSigned (METODOLOGIA §2.2–2.4) avaliada sub-barra a sub-barra, com estado contínuo (como no contexto
  * intrabar da TradingView): regra da vela com lado transportado (var dir = 1, nunca reiniciado; sem cotações
  * bid/ask) e BVC-Normal por intrabar com σ = desvio-padrão populacional de ΔC em sigLen sub-barras.
- * Devolve somas por barra do gráfico (per sub-barras por barra).
+ * Devolve somas por barra do gráfico (per sub-barras por barra): cand e bvc (os deltas usam nz(volume)) e vol, o volume
+ * da fonte intrabar como o indicador o avalia (NaN se faltar em algum intrabar: barra com volume em falta; senão a soma).
  */
 export function refLtfSigned(subs, per, sigLen = 100) {
   const n = Math.floor(subs.length / per);
-  const cand = new Float64Array(n), bvc = new Float64Array(n);
+  const cand = new Float64Array(n), bvc = new Float64Array(n), vol = new Float64Array(n);
   let dir = 1;
   const dps = [];
   subs.slice(0, n * per).forEach((s, i) => {
@@ -212,6 +280,7 @@ export function refLtfSigned(subs, per, sigLen = 100) {
     const v = isF(s.volume) ? s.volume : 0;
     cand[k] += dir * v;
     bvc[k] += v * (2 * normCdf(z) - 1);
+    vol[k] += s.volume; // NaN propaga-se: basta um intrabar sem volume
   });
-  return { cand, bvc };
+  return { cand, bvc, vol };
 }

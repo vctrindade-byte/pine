@@ -2,6 +2,7 @@
 // Cada função devolve { id, bars, klines, episodes, desc }.
 
 import { generate, toKlines, scheduleEpisodes, mulberry32, gaussian } from './synth.mjs';
+import { NO_INTRABARS, STUB_NA_VOL } from './channel.mjs';
 
 const cache = new Map();
 function memo(id, fn) {
@@ -135,4 +136,157 @@ export function nativeLtfData(nChart = 600, per = 5) {
     }
     return { id: `native-${nChart}-${per}`, klines, bars: klines, subs, per, desc: `${nChart} barras 5m agregadas de ${nChart * per} sub-barras de 1 min (15% doji, 3% volume 0)` };
   });
+}
+
+/**
+ * T10 (volume em falta nos intrabars, pedido nativo): nativeLtfData com o volume dos intrabars em falta (na) ou nulo.
+ *   allNa      — os 5 intrabars sem volume e o gráfico também sem volume
+ *   allNaChart — os 5 intrabars sem volume, o gráfico com volume (a fonte escolhida é que conta)
+ *   partNa     — 2 dos 5 intrabars sem volume (gráfico = soma dos outros): a barra fica incompleta → volume em falta
+ *   zero       — os 5 intrabars com volume 0 (gráfico 0): sem negócios
+ *   last       — a última barra, com os 5 intrabars e o gráfico sem volume (estado na tabela)
+ */
+export function nativeNaVolData() {
+  return memo('native-navol', () => {
+    const base = nativeLtfData();
+    const per = base.per;
+    const subs = base.subs.map((x) => ({ ...x }));
+    const klines = base.klines.map((k) => ({ ...k }));
+    const n = klines.length;
+    const marks = { allNa: [300, 301], allNaChart: [350], partNa: [400], zero: [450], last: n - 1 };
+    const setSub = (b, j, v) => { subs[b * per + j].volume = v; };
+    for (const b of [...marks.allNa, ...marks.allNaChart, marks.last]) for (let j = 0; j < per; j++) setSub(b, j, NaN);
+    for (const b of marks.partNa) { setSub(b, 1, NaN); setSub(b, 3, NaN); }
+    for (const b of marks.zero) for (let j = 0; j < per; j++) setSub(b, j, 0);
+    for (let b = 0; b < n; b++) {
+      const v = subs.slice(b * per, (b + 1) * per).map((x) => x.volume);
+      klines[b].volume = marks.allNaChart.includes(b) ? base.klines[b].volume
+        : marks.partNa.includes(b) ? v.filter(Number.isFinite).reduce((a, x) => a + x, 0) : v.reduce((a, x) => a + x, 0);
+    }
+    return { id: 'native-navol', klines, bars: klines, subs, per, marks,
+      desc: `${base.desc}; volume dos intrabars em falta em ${marks.allNa.length + marks.allNaChart.length + 1} barras (todos), parcial em ${marks.partNa.length}, nulo em ${marks.zero.length}` };
+  });
+}
+
+/**
+ * T12 (integridade do volume): série nula de alta qualidade (1S) com barras sem observação de fluxo a meio de um regime
+ * de qualidade alta. Índices e papéis em `marks` (o teste usa-os para as verificações dirigidas):
+ *   missIso  — volume em falta (na) isolado, sem intrabars (→ fallback BVC com volume na), três com um salto de ±6σ
+ *   missRun  — volume em falta em barras seguidas: 3 com +5σ cada, 12 sem salto, 4 com −5σ cada
+ *   zeroLtf  — volume 0 com intrabars (o stub devolve volume 0): planas (O = H = L = C) e com movimento de +4σ
+ *   zeroBar  — volume 0 sem intrabars (fallback BVC; volume da fonte = volume do gráfico = 0), plana e com −4σ
+ *   naChart  — volume do gráfico em falta MAS intrabars com volume (stub: STUB_NA_VOL): é uma observação
+ *   grid     — a partir da barra 1600, uma barra plana sem negócios a cada 9 (pivots separados por barras sem negócios)
+ *   lowQ     — barras observadas sem intrabars (qualidade baixa: partem o regime e bloqueiam pivots que as abarquem)
+ *   burst    — barras sem negócios, com movimento, dentro das divergências construídas (pivPairs: pivots P1/P2 logo a seguir
+ *              a uma lowQ; uma regra «observações seguidas > barras desde o pivot anterior», ou um lqBar que avançasse nas
+ *              barras sem observação, rejeitaria estas divergências, que a regra em observações aceita)
+ *   decoupled — barras 400–599 com o preço desligado do fluxo (ρ ≈ 0: gate fechado; exercita o contador «com o gate aberto»)
+ *   moves    — barras sem observação com salto de preço (com a regra antiga davam «preço sem fluxo»)
+ */
+export function volIntegrityData({ nBars = 2400, seed = 5 } = {}) {
+  const id = `volint-${nBars}-${seed}`;
+  return memo(id, () => {
+    const sr = 8; // σr nominal do gerador (bps)
+    const ov = {};
+    const marks = { missIso: [], missRun: [], zeroLtf: [], zeroBar: [], naChart: [], grid: [], lowQ: [], burst: [], decoupled: [], moves: [], pivPairs: [] };
+    const set = (i, o, role) => { ov[i] = { ...(ov[i] || {}), ...o }; if (role) marks[role].push(i); };
+    // preço desligado do fluxo (ρ ≈ 0 → gate fechado durante ~N observações): há |Z| ≥ limiar com o gate fechado
+    const rngD = mulberry32(99);
+    for (let i = 400; i < 600; i++) set(i, { r: sr * gaussian(rngD) }, 'decoupled');
+    for (const [i, k] of [[700, 6], [760, -6], [820, 0], [880, 6], [940, 0]]) set(i, { volume: NaN, noIntra: true, ...(k ? { r: k * sr } : {}) }, 'missIso');
+    for (let i = 1000; i < 1003; i++) set(i, { volume: NaN, noIntra: true, r: 5 * sr }, 'missRun');
+    for (let i = 1100; i < 1112; i++) set(i, { volume: NaN, noIntra: true }, 'missRun');
+    for (let i = 1200; i < 1204; i++) set(i, { volume: NaN, noIntra: true, r: -5 * sr }, 'missRun');
+    for (const i of [1300, 1302, 1340]) set(i, { volume: 0, flat: true }, 'zeroLtf');
+    for (const i of [1380, 1381]) set(i, { volume: 0, r: 4 * sr }, 'zeroLtf');
+    for (let i = 1420; i < 1425; i++) set(i, { volume: 0, flat: true }, 'zeroLtf');
+    set(1460, { volume: 0, noIntra: true, flat: true }, 'zeroBar');
+    set(1470, { volume: 0, noIntra: true, r: -4 * sr }, 'zeroBar');
+    for (const i of [1500, 1520, 1521, 1540]) set(i, { volume: NaN }, 'naChart');
+    // zona dos pivots: divergências construídas (preço e fluxo impostos) logo a seguir a uma barra observada de qualidade
+    // baixa S (sem intrabars, com volume). side +1: topos (subida até P1, queda com vendas, subida com vendas até P2 > P1);
+    // side −1: fundos (simétrico). 'A': P1 = S+1 (observada, qualidade alta) e 6 barras sem negócios entre os pivots;
+    // 'B': P1 = S+2 numa barra sem negócios (S+1..S+3 sem negócios, qualidade herdada da S = baixa).
+    const cluster = (S, kind, side) => {
+      for (let i = S - 4; i <= S; i++) set(i, { r: side * 2 * sr });
+      set(S, { noIntra: true }, 'lowQ');
+      if (kind === 'A') {
+        set(S + 1, { r: side * 2 * sr });
+        for (let i = S + 2; i <= S + 12; i++) set(i, { r: -side * 2 * sr, q: -side * 0.5, ...(i >= S + 5 && i <= S + 10 ? { volume: 0 } : {}) }, i >= S + 5 && i <= S + 10 ? 'burst' : null);
+      } else {
+        for (const [k, sg] of [[1, 1], [2, 1], [3, -1]]) set(S + k, { r: sg * side * 2 * sr, volume: 0 }, 'burst');
+        for (let i = S + 4; i <= S + 12; i++) set(i, { r: -side * 2 * sr, q: -side * 0.5 });
+      }
+      for (let i = S + 13; i <= S + 21; i++) set(i, { r: side * 3 * sr, q: -side * 0.5 });
+      for (let i = S + 22; i <= S + 24; i++) set(i, { r: -side * 2 * sr, q: 0 });
+      marks.pivPairs.push({ S, kind, side, p1: S + (kind === 'A' ? 1 : 2), p2: S + 21 });
+    };
+    cluster(1640, 'A', 1); cluster(1700, 'B', 1); cluster(1760, 'A', -1); cluster(1820, 'B', -1);
+    for (const i of [1991, 2151]) set(i, { noIntra: true }, 'lowQ');
+    // e uma barra plana sem negócios a cada 9 (onde não houver outra alteração)
+    for (let i = 1600; i < nBars - 5; i += 9) if (!ov[i]) set(i, { volume: 0, flat: true }, 'grid');
+    // barras sem observação (volume em falta ou nulo) com salto de preço imposto
+    marks.moves = Object.keys(ov).map(Number).filter((i) => ov[i].r !== undefined && ov[i].r !== 0 && (Number.isNaN(ov[i].volume) || ov[i].volume === 0)).sort((a, b) => a - b);
+    const d = build(id, { seed, nBars, overrides: ov }, `${nBars} barras 5m nulas (seed ${seed}) com volume em falta/nulo a meio da ` +
+      `qualidade alta: ${marks.missIso.length} em falta isoladas, ${marks.missRun.length} em falta seguidas, ${marks.zeroLtf.length + marks.zeroBar.length} sem ` +
+      `negócios, ${marks.naChart.length} com o volume do gráfico em falta e intrabars com volume; na zona dos pivots ${marks.pivPairs.length} divergências ` +
+      `construídas a seguir a barras de qualidade baixa (${marks.burst.length} barras sem negócios no meio), ${marks.lowQ.length} de qualidade baixa e ${marks.grid.length} sem negócios (1 em 9)`);
+    d.marks = marks;
+    return d;
+  });
+}
+
+/**
+ * T12 (aglomerados em observações): as absorções do T6 (mesmos episódios e semente) com sequências de `gap` barras planas
+ * sem negócios (gap > ke = 3) dentro de cada episódio, a `offsets` barras do início. O período refractário dos eventos
+ * conta observações (a unidade da janela ke do zF/zP), por isso um aglomerado não se parte numa sequência de barras sem
+ * observação; uma regra em barras abriria aí um evento novo (etiqueta e alerta repetidos).
+ */
+export function clusterGapData({ gap = 4, offsets = [6, 14, 22] } = {}) {
+  const id = `absgap-${gap}-${offsets.join('_')}`;
+  return memo(id, () => {
+    const count = 10, spacing = 320, firstStart = 520, strength = 0.4;
+    const episodes = scheduleEpisodes({ type: 'absorption', count, firstStart, spacing, lenMin: 20, lenMax: 40, sides: [1, -1], strength, seed: 21 });
+    const nBars = firstStart + count * spacing + 60;
+    const ov = {}, gaps = [];
+    for (const ep of episodes) {
+      for (const o of offsets) {
+        if (o + gap > ep.len) continue;
+        for (let i = ep.start + o; i < ep.start + o + gap; i++) ov[i] = { volume: 0, flat: true };
+        gaps.push(ep.start + o);
+      }
+    }
+    const d = build(id, { seed: 13, nBars, episodes, overrides: ov }, `${count} absorções do T6 com ${gaps.length} sequências de ${gap} barras ` +
+      `planas sem negócios dentro dos episódios (a ${offsets.join('/')} barras do início)`);
+    d.marks = { gaps, gap };
+    return d;
+  });
+}
+
+/** T12: série curta cuja ÚLTIMA barra não tem observação (estado na tabela): kind 'miss' (volume em falta) ou 'zero'. */
+export function volStateData(kind, nBars = 400, seed = 5) {
+  const id = `volstate-${kind}-${nBars}-${seed}`;
+  return memo(id, () => build(id, { seed, nBars, overrides: { [nBars - 1]: kind === 'miss' ? { volume: NaN, noIntra: true } : { volume: 0, flat: true } } },
+    `${nBars} barras 5m; última barra ${kind === 'miss' ? 'com volume em falta' : 'sem negócios'}`));
+}
+
+/**
+ * T12 (edição Footprint): footprint com volume PRÓPRIO, independente do do gráfico. Barras sem intrabars do conjunto
+ * (volume em falta) ficam sem footprint (→ fallback BVC com o volume do gráfico na); as barras planas «sem negócios»
+ * zeroLtf 1420–1424 e a grelha têm footprint de volume 0; as outras zeroLtf (gráfico com volume 0) têm footprint com
+ * volume fpVol > 0 — o delta é o do footprint e a barra é uma observação; naChart: footprint com STUB_NA_VOL.
+ * Devolve { footprint, fpBar } com fpBar[i] = { delta, vol } (ou null sem footprint) para a referência.
+ */
+export function volIntegrityFootprint(data, { fpVol = 50 } = {}) {
+  const zeroFp = new Set([...data.marks.grid, ...data.marks.zeroLtf.filter((i) => i >= 1420 && i < 1425)]);
+  const footprint = [], fpBar = [];
+  data.bars.forEach((b, i) => {
+    if (b.code === NO_INTRABARS) { fpBar.push(null); return; } // sem footprint
+    const V = zeroFp.has(i) ? 0 : Number.isFinite(b.volume) && b.volume > 0 ? b.volume : b.volume === 0 ? fpVol : STUB_NA_VOL;
+    const buy = (V * (1 + b.q)) / 2, sell = (V * (1 - b.q)) / 2;
+    footprint.push({ openTime: b.openTime, levels: [{ price: b.low, buyVolume: buy, sellVolume: sell }] });
+    fpBar.push({ delta: buy - sell, vol: buy + sell });
+  });
+  return { footprint, fpBar };
 }

@@ -17,7 +17,7 @@
 //   - pwf ("price without flow"): L barras com deriva no ruído do preço (sinal ±1) e Δ ≈ 0.
 // O delta verdadeiro por barra (bars[i].delta) e a fracção compradora (bars[i].buyFrac) são conhecidos.
 
-import { encodeQ, decodeQ, NO_INTRABARS } from './channel.mjs';
+import { encodeQ, decodeQ, NO_INTRABARS, STUB_NA_VOL } from './channel.mjs';
 
 /** PRNG mulberry32 (determinístico, 32 bits). */
 export function mulberry32(seed) {
@@ -58,6 +58,11 @@ export const DEFAULTS = Object.freeze({
   noIntrabarsBlocks: [], // [[início, comprimento], …]: blocos a meio do histórico sem intrabars (falhas/quebras de tier)
   episodes: [], // [{ type: 'absorption'|'pwf', start, len, side, strength }]
   gaps: null, // { seed, jumpProb, jumpMin, jumpMax (bps), daySd (bps), after }: saltos de abertura (ver acima)
+  // Alterações por barra (integridade do volume, T12): { [i]: { volume, noIntra, r, q, flat } } — volume NaN (em falta) ou 0
+  // (sem negócios), barra sem intrabars, retorno r (bps) imposto, rácio do agressor q imposto, flat = barra sem movimento
+  // (O = H = L = C; impõe r = 0).
+  // Não consomem números aleatórios: o resto da série é idêntico ao gerado sem elas.
+  overrides: {},
 });
 
 /**
@@ -121,15 +126,22 @@ export function generate(opts = {}) {
       }
     }
     if (o.zeroVolProb > 0 && uZero < o.zeroVolProb) V = 0;
+    const ov = o.overrides[i];
+    if (ov && ov.volume !== undefined) V = ov.volume;
+    if (ov && ov.q !== undefined) q = ov.q;
     const inBlock = o.noIntrabarsBlocks.some(([s0, len]) => i >= s0 && i < s0 + len);
-    const noIntra = i < o.noIntrabarsHead || (o.noIntrabarsProb > 0 && uNoIntra < o.noIntrabarsProb) || inBlock;
+    const noIntra = i < o.noIntrabarsHead || (o.noIntrabarsProb > 0 && uNoIntra < o.noIntrabarsProb) || inBlock || Boolean(ov && ov.noIntra);
     const code = noIntra ? NO_INTRABARS : encodeQ(q);
     const qHat = noIntra ? encodeless(q) : decodeQ(code);
-    const delta = V * qHat; // delta verdadeiro (quantizado como o stub o vê)
-    const r = o.sigmaR * (priceFlowCoef * (delta / sigmaDeltaNominal) + noiseCoef * e + drift);
+    // volume na no gráfico: os intrabars do stub têm STUB_NA_VOL (channel.mjs); o impacto no preço usa esse volume
+    const vFlow = Number.isFinite(V) ? V : STUB_NA_VOL;
+    const delta = vFlow * qHat; // delta verdadeiro (quantizado como o stub o vê)
+    let r = o.sigmaR * (priceFlowCoef * (delta / sigmaDeltaNominal) + noiseCoef * e + drift);
+    if (ov && ov.r !== undefined) r = ov.r;
+    if (ov && ov.flat) r = 0;
     const open = price;
     const close = open * Math.exp(r / 1e4);
-    const wick = (o.sigmaR * 0.3) / 1e4;
+    const wick = ov && ov.flat ? 0 : (o.sigmaR * 0.3) / 1e4;
     const high = Math.max(open, close) * Math.exp(wick * hNoise);
     const low = Math.min(open, close) * Math.exp(-wick * lNoise);
     bars.push({

@@ -3,7 +3,8 @@
 Este documento descreve, com as fórmulas exactas, o que o indicador «Preço × CVD Normalizado [Order Flow]» calcula e
 porquê. Segue o código de `src/price_cvd_normalizer.src.pine`. Onde a implementação se afasta do dossier de
 investigação original ([research-dossier.md](research-dossier.md)), prevalece este documento; as diferenças estão
-resumidas na [secção 10](#10-diferenças-em-relação-ao-dossier).
+resumidas na [secção 10](#10-diferenças-em-relação-ao-dossier). A auditoria externa ao indicador, com a nossa
+avaliação ponto a ponto, está em [AUDITORIA.md](AUDITORIA.md).
 
 **Oráculo dos testes.** As fórmulas e regras deste documento são a referência contra a qual o código é verificado.
 Há duas reimplementações independentes: uma em JavaScript (`tests/lib/refz.mjs`), usada pelo harness de testes (ver
@@ -154,11 +155,11 @@ $$
 $$
 
 em que r_t é o retorno da barra com a guarda de gaps da secção 3.1 e σ_{r,t−1} o desvio-padrão de r nas 100 barras
-anteriores (z_t = 0 se σ não for válido). Foi o melhor estimador só com barras do gráfico em dados reais
-(correlação 0,47–0,83 com o delta verdadeiro), mas é **derivado do preço**: a qualidade é baixa e não há Z nem eventos
-nessas barras. Não se usam o CLV, V·(2C − H − L)/(H − L), que foi o pior estimador em dados reais (correlações parciais
-negativas em 2 de 5 conjuntos), nem a regra do sinal da barra inteira (sinal certo em só ~55% das barras de absorção)
-[E].
+anteriores (z_t = 0 se σ não for válido); com V_t em falta, Δ̂_t é *na*, não 0 (secção 2.6, regra 5). Foi o melhor
+estimador só com barras do gráfico em dados reais (correlação 0,47–0,83 com o delta verdadeiro), mas é **derivado do
+preço**: a qualidade é baixa e não há Z nem eventos nessas barras. Não se usam o CLV, V·(2C − H − L)/(H − L), que foi
+o pior estimador em dados reais (correlações parciais negativas em 2 de 5 conjuntos), nem a regra do sinal da barra
+inteira (sinal certo em só ~55% das barras de absorção) [E].
 
 ### 2.6 Selecção da fonte e qualidade por barra
 
@@ -184,10 +185,26 @@ volume» na tabela. Em cada barra:
 2. Footprint seleccionado e com dados nesta barra → delta do footprint, qualidade *h*.
 3. Intrabars disponíveis (fonte intrabar, ou footprint com o preenchimento ligado) → delta intrabar, qualidade cfg.
 4. Caso contrário, «Barras sem intrabars» = BVC → BVC na barra, qualidade 1; = Nenhum → delta *na*, qualidade 0.
-5. Barra com volume zero → delta 0 e a qualidade da barra anterior (não parte as séries).
+5. **Barra sem observação de fluxo.** O volume da fonte escolhida em 1–4 (o do gráfico com o BVC na barra; a soma
+   dos intrabars, em falta se faltar em algum intrabar; o volume total do footprint) está em falta (*na*: o fornecedor
+   não o deu) ou é zero (sem negócios). Numa barra sem fonte (4 com «Nenhum») decide o volume do gráfico: zero → sem
+   negócios (uma barra sem negócios não tem intrabars de 1S/1T nem footprint); em falta → a barra fica sem dados
+   (qualidade 0). Uma barra sem observação não é uma observação (r, Δ = 0), que seria um falso «preço sem fluxo»: fica
+   fora de σ, ρ, D, do RMS e dos eventos (secções 3 a 7), não conta nem parte a sequência de qualidade e mantém a
+   qualidade da barra anterior. O delta é 0 sem negócios (as linhas continuam) e *na* com volume em falta (as linhas
+   interrompem-se).
 
-Um contador hqRun guarda o número de barras **seguidas** com qualidade ≥ 2. As estatísticas exigem que as suas
-janelas caibam inteiras nesse regime (secção 6.4).
+Um contador hqRun guarda o número de **observações seguidas** (barras com fluxo observado) com qualidade ≥ 2: as
+barras sem observação não o incrementam nem o reiniciam. As estatísticas exigem que as suas janelas, que também contam
+observações (`math.sum` e os `ta.*` saltam os valores *na*), caibam inteiras nesse regime (secção 6.4).
+
+**A qualidade é uma classificação, não uma garantia.** O nível resulta da configuração dos dados (fonte, timeframe dos
+intrabars face ao do gráfico, classificador, tipo de volume declarado), não de uma medição, barra a barra, de que o
+lado agressor foi observado. Todas as fontes são estimativas: o footprint é classificado pela TradingView a partir da
+acção do preço intrabar [V-sec] e não foi comparado aqui com o delta verdadeiro; 1S com a regra da vela correlacionou
+0,90 com o delta verdadeiro em BTCFDUSD e 0,71 em acções (secção 2.7) [E]; um volume de ticks não declarado não é
+detectado. A qualidade ordena as configurações pela evidência disponível e decide onde há Z e eventos; não certifica o
+delta de uma barra ([AUDITORIA.md](AUDITORIA.md), ponto (c)).
 
 A precisão Auto replica a regra da TradingView para o seu CVD [V-sec, Centro de Ajuda]: «1S» em gráficos de
 segundos, «1» (1 minuto) em intradiário, «5» no diário e «60» no semanal ou superior. Num gráfico de 1 minuto ou de
@@ -244,8 +261,9 @@ $$
 d_t=\begin{cases}\hat\Delta_t-\overline{\hat\Delta}_{N,t-1} & \text{com «Remover deriva do fluxo»}\\ \hat\Delta_t & \text{caso contrário}\end{cases}
 $$
 
-em que a média móvel de N barras é desfasada uma barra. As pernas são **alinhadas**: r_t passa a *na* sempre que d_t
-é *na*, e vice-versa, para que σ, ρ e as somas usem exactamente as mesmas barras.
+em que a média móvel de N observações é desfasada uma barra. As pernas são **alinhadas**: r_t passa a *na* sempre que
+d_t é *na*, e vice-versa, para que σ, ρ e as somas usem exactamente as mesmas barras. Nas barras sem observação de fluxo
+(secção 2.6, regra 5) d_t é *na*; as janelas de N, K e k_e valores contam só observações.
 
 ### 3.3 Escalas
 
@@ -368,6 +386,9 @@ $$
 
 - As duas linhas começam perto de 0. Na barra da âncora ficam *na* (a linha interrompe-se), para não desenhar uma
   ligação vertical enganadora.
+- As linhas são **níveis**: numa barra sem negócios o CVD não muda (incremento 0) e numa barra com volume em falta as
+  duas linhas interrompem-se; se o preço se mover numa dessas barras, a linha do preço mostra-o (o Z e os eventos não o
+  contam, secção 2.6).
 - Unidades: «quantos movimentos típicos de uma barra o preço e o fluxo percorreram desde a âncora».
 - Dentro de um período cada linha é uma transformação afim de ln P e do CVD: a linha do preço tem exactamente a forma
   do gráfico em escala logarítmica.
@@ -473,6 +494,13 @@ $$
 **Sinal.** Z > 0: a perna do preço está à frente da perna do fluxo (o preço subiu mais, ou caiu menos, do que o fluxo
 implica). Z < 0: o fluxo está à frente do preço. Não é um sinal de alta nem de baixa.
 
+**Natureza.** O Z é um **score empírico de divergência**, não o z-score de uma normal padrão. A recalibração pelo RMS
+(secção 6.3) dá E[Z²] ≈ 1, mas não torna o Z normal nem as suas barras independentes: a soma K é sobreposta (dois Z
+seguidos partilham K − 1 termos), o fluxo tem memória longa e as unidades-σ têm caudas pesadas. Em dados reais
+|Z| ≥ 2 ocorreu em 5,4–6,2% das barras e |Z| ≥ 3 em 1,0–1,6%, contra 4,6% e 0,27% numa normal (secção 6.8). Os
+limiares 2 e 3 são marcas convencionais, não níveis de probabilidade; a dica do Z mostra a frequência medida em cada
+gráfico (secção 6.7).
+
 ### 6.2 Porque é simétrica
 
 Para duas variáveis padronizadas com correlação ρ, Var(u_r − u_d) = 2(1 − ρ). (u_r − u_d)/√2 é a componente principal
@@ -523,13 +551,14 @@ valores e para ~1,05 (|Z| ≥ 2) e ≤ 1,1 (|Z| ≥ 3) com 400 ou mais ([VALIDAC
 D só é calculado quando todas as janelas que o alimentam estão em dados de qualidade ≥ média:
 
 $$
-\text{hqOk}_t=\big[\text{qualidade}_t\ge2\big]\wedge\big[\text{hqRun}_t\ge N+\max(K,k_e)+N\cdot\mathbb 1_{\text{deriva}}\big]
+\text{hqOk}_t=\big[\text{qualidade}_t\ge2\big]\wedge\big[t\ \text{é uma observação}\big]\wedge\big[\text{hqRun}_t\ge N+\max(K,k_e)+N\cdot\mathbb 1_{\text{deriva}}\big]
 $$
 
-O termo mais antigo da soma K usa o σ das barras [t − K + 1 − N, t − K]; com a remoção da deriva, a média de N barras
-recua mais N barras. O mesmo vale para as somas curtas dos eventos (janela k_e). Com os valores por omissão em 5
-minutos (k_e = 3), são precisas 120 barras seguidas de qualidade ≥ média e depois N = 100 valores de D: o Z aparece
-ao fim de cerca de 220 barras.
+O termo mais antigo da soma K usa o σ das observações [t − K + 1 − N, t − K] (contadas em observações); com a remoção
+da deriva, a média de N observações recua mais N. O mesmo vale para as somas curtas dos eventos (janela k_e). Com os
+valores por omissão em 5 minutos (k_e = 3), são precisas 120 observações seguidas de qualidade ≥ média e depois
+N = 100 valores de D: o Z aparece ao fim de cerca de 220 barras (mais as barras sem observação pelo meio). Numa barra
+sem observação não há D (não se repete o da barra anterior), nem Z, gate ou eventos.
 
 ### 6.5 Gate de validade ρ
 
@@ -547,7 +576,11 @@ $$
 - Com delta **estimado** de intrabars de 1 minuto, o ρ mediano fica inflacionado (0,57 contra 0,49) e o gate abre em
   ~92% das barras [E]: por isso o gate exige também qualidade ≥ média.
 - Um ρ̂ negativo fecha o gate e é assinalado como possível problema de dados ou de classificação.
-- Com o gate fechado o Z fica cinzento, não escondido.
+- Com o gate fechado o Z fica cinzento, não escondido. O Z e a sua calibração não dependem do gate (só de hqOk); os
+  quatro estados, os eventos e os alertas dependem.
+- O gate **não se desliga** por completo: com «ρ mínimo» = 0 fica o limite de Fisher (0,196 com N = 100, 0,113 com
+  N = 300). Se o gate filtra regimes com interesse (por exemplo uma absorção prolongada, que baixa o próprio ρ̂) é uma
+  questão em aberto, que exige um estudo de retornos seguintes ([AUDITORIA.md](AUDITORIA.md), ponto (d)).
 
 Referências de contexto: em câmbio, com dados diários, o fluxo explica uma fracção grande das variações (R² acima de
 60% em Evans e Lyons [V]); o R² intradiário com o CVD, que só vê negócios agressores, é naturalmente mais baixo. Os
@@ -575,7 +608,7 @@ absoluto) determina o sinal da perna dominante:
 | Z ≥ +limiar, \|P\| ≥ \|F\| | P > 0 | Preço a subir sem fluxo comprador proporcional | Subida não confirmada: recompra de vendas a descoberto com ordens limite, retirada de ofertas de venda ou notícia |
 
 Não há quinto estado além dos empates (que caem no ramo do preço). Em dados reais, a coerência entre o sinal de Z e o
-sinal implicado da perna dominante foi de 100% nas 1828 barras com |Z| ≥ 2 das três corridas sem remoção da deriva da
+sinal implicado da perna dominante foi de 100% nas 1829 barras com |Z| ≥ 2 das três corridas sem remoção da deriva da
 secção 3.4 de [VALIDACAO.md](VALIDACAO.md) [E].
 
 ### 6.7 Alertas de Z
@@ -586,6 +619,10 @@ secção 3.4 de [VALIDACAO.md](VALIDACAO.md) [E].
   episódio repetia o alerta poucas barras depois.
 - Exigem pelo menos 2N valores de calibração. Um cruzamento antes disso desarma na mesma: o alerta não sai atrasado, a
   meio do episódio.
+- A dica do Z na tabela mostra a frequência empírica de |Z| ≥ limiar e ≥ limiar forte **neste gráfico**, nas barras
+  fechadas com Z e pelo menos 2N valores de calibração (as mesmas em que os alertas de Z podem disparar), e a parte
+  dessas barras com o gate aberto, com a frequência de |Z| ≥ limiar entre elas (condicional ao gate). É uma medição,
+  não um sinal: o Z é um score empírico e não segue uma normal (secção 6.8).
 
 ### 6.8 Evidência de calibração [E]
 
@@ -601,8 +638,12 @@ Candidatos comparados em BTCFDUSD real (delta verdadeiro) e numa simulação de 
 | Resíduo ancorado / (σ_e√n) | 13,0% / 7,2% / 17,8% | Depende do número de barras por sessão | — |
 
 Na validação do código final em dados reais (secção 3 de [VALIDACAO.md](VALIDACAO.md)), com o delta verdadeiro e
-calibração completa, P(|Z| ≥ 2) foi 6,19% e 6,05% em duas janelas de 5 minutos e 5,35% em 15 minutos; P(|Z| ≥ 3) foi
-1,61%, 1,04% e 1,48% [E]. O dossier refere que, combinado com o gate, um |Z| ≥ 2 nulo cai para cerca de 0,04% das
+calibração completa, P(|Z| ≥ 2) foi 6,19% e 6,07% em duas janelas de 5 minutos e 5,35% em 15 minutos; P(|Z| ≥ 3) foi
+1,61%, 1,04% e 1,48% [E]. Numa normal seriam 4,55% e 0,27%: o excesso é de cerca de 1,3 vezes a 2 e de 4 a 6 vezes a 3.
+Nas duas janelas de 5 minutos, a autocorrelação do Z foi 0,93–0,94 a uma barra e 0,43–0,56 a 10 barras, a curtose 4,4
+e 7,3 (3 numa normal) e as 537 barras com |Z| ≥ 2 da primeira janela formaram 127 blocos contíguos [E]: uma frequência
+de barras não é uma frequência de episódios independentes. A dica do Z mostra, em cada gráfico, a frequência medida
+nas barras com calibração completa (secção 6.7); é uma descrição da própria amostra, não um p-valor. O dossier refere que, combinado com o gate, um |Z| ≥ 2 nulo cai para cerca de 0,04% das
 barras: essa nula é uma série em que o preço e o fluxo não estão relacionados (ρ ≈ 0), e aí o gate fica fechado em
 quase todas as barras (passagem nula de 0,25–0,5%, secção 6.5). Esse número mede a protecção do gate quando não há
 relação preço-fluxo, não a frequência de |Z| ≥ 2 em dados reais: com o gate aberto, a taxa base continua a ser cerca
@@ -665,6 +706,10 @@ Com s = sign(z_F) e o gate aberto:
 | CONFIRMADO | \|z_F\| ≥ 2 e s·z_P ≥ \|ρ̂\|·\|z_F\| | Não é marcado (espera-se reversão parcial; contexto) |
 | PREÇO SEM FLUXO | não ABSORVIDO, \|z_P\| ≥ 2 e sign(z_P)·z_F ≤ 0 | «Preço ↑ sem fluxo comprador» / «Preço ↓ sem fluxo vendedor» |
 
+As classes descrevem o par (z_F, z_P); não identificam o mecanismo. «Absorvido» e «travado» são hipóteses: o mesmo
+padrão pode vir de liquidez passiva, de impacto côncavo, de fluxo previsível (memória longa), de preço formado noutro
+mercado ou de erro de classificação do delta (lista e testes necessários em [AUDITORIA.md](AUDITORIA.md), ponto (f)).
+
 Entre ABSORVIDO e CONFIRMADO fica uma zona intermédia (0 < s·z_P < |ρ̂|·|z_F|: o preço acompanhou o fluxo, mas menos
 do que ρ implica) que não é marcada, excepto pelos casos TRAVADO: estes incluem casos com o preço ligeiramente no
 sentido do fluxo, mas nunca a classe CONFIRMADO. Com os valores por omissão a exclusão não muda nada
@@ -674,11 +719,12 @@ o z_F tem caudas pesadas e |z_F| ≥ 3 ocorreu em 2–3,5% das barras em dados r
 ### 7.3 Aglomerados
 
 Um evento novo de uma classe começa quando o lado muda (por exemplo, compras absorvidas e, na barra seguinte, vendas
-absorvidas, comum com k_e = 1) ou quando passaram **mais de k_e barras** desde a última barra da mesma classe e do
-mesmo lado (período refractário). Um mergulho de 1–2 barras de |z_F| abaixo do limiar não cria um evento novo. Só a
-primeira barra de cada aglomerado gera rótulo e alerta, e só em barras fechadas. Se um aglomerado TRAVADO começar
-dentro de um aglomerado de absorção já assinalado, do mesmo lado, o rótulo pendente recebe «· preço travado» e o
-alerta de «travado» dispara, sem um evento novo.
+absorvidas, comum com k_e = 1) ou quando passaram **mais de k_e observações** desde a última barra da mesma classe e
+do mesmo lado (período refractário). Conta-se em observações, a unidade da janela k_e de z_F e z_P: uma sequência de
+barras sem observação de fluxo (secção 2.6) não parte um aglomerado. Um mergulho de 1–2 barras de |z_F| abaixo do
+limiar não cria um evento novo. Só a primeira barra de cada aglomerado gera rótulo e alerta, e só em barras fechadas.
+Se um aglomerado TRAVADO começar dentro de um aglomerado de absorção já assinalado, do mesmo lado, o rótulo pendente
+recebe «· preço travado» e o alerta de «travado» dispara, sem um evento novo.
 
 ### 7.4 Qualidade e confiança
 
@@ -697,7 +743,8 @@ com o delta verdadeiro desapareceu com delta estimado de intrabars de 1 minuto [
 Há no máximo **um** evento de absorção pendente.
 
 1. Na barra do evento t₀ regista-se o lado (+1 compras, −1 vendas), H₀ = máximo de H nas últimas k_e barras e
-   L₀ = mínimo de L nas últimas k_e barras (incluindo t₀).
+   L₀ = mínimo de L nas últimas k_e barras (incluindo t₀). Aqui contam barras, não observações: é o intervalo de preço
+   da janela de tempo do evento, e o preço de uma barra sem negócios também é um preço.
 2. Em cada barra fechada t > t₀, para compras absorvidas (lado +1):
    - C_t > H₀ → **«→ continuação ↑»**: a absorção falhou, o fluxo ganhou; cor de subida.
    - C_t < L₀ → **«→ absorção segurou ↓»**: o lado passivo venceu; cor de descida.
@@ -738,9 +785,14 @@ Opcional, desligada por omissão.
   0,5·σ_{Δ,t−1}.
 - **Fundo sem confirmação do fluxo**: pl < pivot de mínimo anterior e CVD^c no pivot ≥ CVD^c no pivot anterior +
   0,5·σ_{Δ,t−1}.
-- Os dois pivots têm de estar a 5–60 barras de distância e dentro do mesmo regime contínuo de qualidade ≥ média.
+- Os dois pivots têm de estar a 5–60 barras de distância e dentro do mesmo regime contínuo de qualidade ≥ média:
+  nenhuma barra **observada** de qualidade < média entre o pivot anterior e a confirmação (as barras sem observação de
+  fluxo não contam, secção 2.6).
 - O rótulo fica na barra do pivot, em estilo neutro e oco; o alerta sai na confirmação (Ri barras depois). No painel,
   uma linha pontilhada liga os valores da linha do CVD nos dois pivots, se estiverem no mesmo período de âncora.
+- Num gráfico histórico o rótulo aparece numa barra em que ainda não era conhecido. Um backtest tem de entrar na barra
+  de confirmação t (no fecho, ou na abertura seguinte), nunca no pivot t − Ri; o mesmo vale para as resoluções das
+  absorções, escritas no rótulo do evento só quando acontecem ([AUDITORIA.md](AUDITORIA.md), ponto (g)).
 - A magnitude é medida em unidades do σΔ de **uma** barra: não escala com a distância entre os pivots.
 
 **Evidência.** Num teste interno a extremos de 4 horas (não a estes pivots), os novos extremos já reverteram
@@ -784,6 +836,8 @@ mais de 64 células. **O Z é um medidor descritivo de divergência, não uma pr
 - A calibração assenta num par cripto à vista em 4 meses mais simulações. Futuros do CME (âncoras Globex e RTH),
   acções e perpétuos líquidos não estão validados. Os limiares (gate 0,30, |Z| 2/3, K = 20, M = 1000, c = 4) têm base
   teórica e são empiricamente razoáveis, mas não foram validados fora da amostra.
+- Os eventos e os cruzamentos de Z do código final não foram testados contra retornos seguintes, MFE/MAE, controlos e
+  custos. O plano de validação e o que dele já existe estão em [AUDITORIA.md](AUDITORIA.md), ponto (i).
 
 ---
 
@@ -797,8 +851,8 @@ difere nos pontos seguintes, todos deliberados:
 | Qualidade alta | Intrabars de ticks ou de segundos | Só «1T» ou «1S» com a regra da vela; outros segundos/ticks e o BVC: média. Símbolos com volume de ticks declarado ou FX à vista: no máximo baixa (os CFD com volume de ticks não declarado não são detectados; secção 2.6) |
 | Costura da cobertura | Marcar a transição e recomeçar o aquecimento | Também reinicia as linhas uma vez quando a escala congelada veio de uma janela mista (secção 4.4) |
 | Aquecimento do Z | 2N valores antes de mostrar o Z | Z mostrado com N valores (calibração provisória assinalada); alertas de Z com 2N; eventos sem alertas com menos de max(20·k_e, 2N) |
-| Condição de dados do Z | Janelas σ/ρ em dados de qualidade ≥ média | Todas as janelas de todos os termos: N + max(K, k_e) barras seguidas (+N com a deriva) |
-| Aglomerados de eventos | 1.ª barra de `cond and not cond[1]` | Por classe **e** lado, com período refractário de k_e barras |
+| Condição de dados do Z | Janelas σ/ρ em dados de qualidade ≥ média | Todas as janelas de todos os termos: N + max(K, k_e) observações seguidas (+N com a deriva); as barras sem negócios ou com volume em falta não são observações (secção 2.6) |
+| Aglomerados de eventos | 1.ª barra de `cond and not cond[1]` | Por classe **e** lado, com período refractário de k_e observações |
 | Alertas de Z | 1.º cruzamento | 1.º cruzamento com histerese (rearme em limiar − 1) |
 | Alerta «travado» | Um alerta | Um por lado; também quando o «travado» surge dentro de uma absorção pendente |
 | Janela do evento | max(1, round(900/seg)) | Limitada a M/20 barras |

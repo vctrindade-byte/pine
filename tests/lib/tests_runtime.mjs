@@ -1,14 +1,16 @@
 // T0 auto-verificação do harness, T4 matriz de execução, T5 calibração nula, T6 detecção + auditoria exacta dos
 // eventos, T7 invariantes, T8 concordância com a referência JS (docs/METODOLOGIA.md §6/§7), T9 motor de delta e tier, T10 LTF
-// nativo, T11 timeframes/âncoras/qualidade.
+// nativo, T11 timeframes/âncoras/qualidade, T12 integridade do volume (barras sem observação de fluxo).
 
 import { loadPineTS, pinetsVersion, runPine, labelBar, labelText, getPlot, maxJobs } from './pinets.mjs';
 import { generate, toKlines } from './synth.mjs';
-import { stubPineSource, stubDelta, stubDeltaBvc, STUB_K, NO_INTRABARS, encodeQ, decodeQ } from './channel.mjs';
-import { matrixData, nullData, gapData, jumpData, seamData, absorptionData, pwfData, engineData, footprintFor, nativeLtfData } from './datasets.mjs';
-import { computeRBar, computeRef, computeBarDelta, utcDayKey, utcWeekKey, utcMonthKey, refLtfSigned } from './refz.mjs';
+import { stubPineSource, stubDelta, stubDeltaBvc, stubVol, STUB_K, STUB_NA_VOL, NO_INTRABARS, encodeQ, decodeQ } from './channel.mjs';
+import { matrixData, nullData, gapData, jumpData, seamData, absorptionData, pwfData, engineData, footprintFor, nativeLtfData,
+  volIntegrityData, volStateData, volIntegrityFootprint, clusterGapData, nativeNaVolData } from './datasets.mjs';
+import { computeRBar, computeRef, computeBarDelta, refEngine, utcDayKey, utcWeekKey, utcMonthKey, refLtfSigned } from './refz.mjs';
 import { probeBuiltins } from './builtins.mjs';
-import { fmt, pct } from './report.mjs';
+import { preprocess } from './preprocess.mjs';
+import { fmt, pct, TestCase, STATUS } from './report.mjs';
 import { isF, finiteFrac, exceedFrac, meanSd, pearsonArr, relErr, quantile, compareSeries, range } from './util.mjs';
 
 // detecção = etiqueta/alerta de absorção ou travado; as resoluções (títulos com "→") não contam
@@ -27,7 +29,7 @@ function params(target, tfSec = 300) {
   const keRaw = Math.max(1, Math.round((defNum(target, 'evWinIn', 15) * 60) / tfSec));
   const ke = Math.min(keRaw, Math.max(1, Math.floor(M / 20)));
   const life = Math.max(1, Math.round((defNum(target, 'lifeIn', 60) * 60) / tfSec));
-  return { N, K, M, W: defNum(target, 'wIn', 100), clip: defNum(target, 'clipIn', 4), thr: defNum(target, 'thrIn', 2),
+  return { N, K, M, W: defNum(target, 'wIn', 100), clip: defNum(target, 'clipIn', 4), thr: defNum(target, 'thrIn', 2), thr2: defNum(target, 'thr2In', 3),
     rhoMin: defNum(target, 'rhoMinIn', 0.3), ke, life, hqNeed: N + Math.max(K, ke),
     zf: defNum(target, 'zfIn', 2), pin: defNum(target, 'pinIn', 3), pinP: defNum(target, 'pinPIn', 0.5),
     piv: { L: defNum(target, 'pivLIn', 5), R: defNum(target, 'pivRIn', 2), min: defNum(target, 'pivMinIn', 5),
@@ -49,10 +51,13 @@ export async function t0SelfCheck(tc, targets) {
   const mod = await loadPineTS();
   tc.check(Boolean(mod.PineTS && mod.Indicator), 'PineTS carregado', `versão ${await pinetsVersion()}`);
   // canal + stub isolados num script mínimo
-  const { bars } = generate({ seed: 2, nBars: 700, noIntrabarsProb: 0.05, zeroVolProb: 0.02 });
+  // volume na no gráfico em 3 barras (2 com intrabars: o stub dá-lhes STUB_NA_VOL; 1 sem intrabars)
+  const { bars } = generate({ seed: 2, nBars: 700, noIntrabarsProb: 0.05, zeroVolProb: 0.02,
+    overrides: { 100: { volume: NaN }, 101: { volume: NaN, noIntra: true }, 350: { volume: NaN } } });
   const src = ['//@version=6', 'indicator("harness self-check")', stubPineSource(),
     '[aCand, aBvc, aVol] = __ltfStub()', 'int nIntra = na(aVol) ? 0 : aVol.size()',
-    'plot(nIntra > 0 ? aCand.sum() : na, "d")', 'plot(nIntra, "n")', 'plot(timeframe.in_seconds(), "tf")',
+    'plot(nIntra > 0 ? aCand.sum() : na, "d")', 'plot(nIntra > 0 ? aVol.sum() : na, "v")', 'plot(na(volume) ? 1 : 0, "vna")',
+    'plot(nIntra, "n")', 'plot(timeframe.in_seconds(), "tf")',
     'plot(timeframe.change("1D") ? 1 : 0, "chgD")', 'plot(timeframe.change("1W") ? 1 : 0, "chgW")', 'plot(session.isfirstbar ? 1 : 0, "sfb")',
     'plot(syminfo.mintick, "mt")', 'plot(barstate.isconfirmed ? 1 : 0, "conf")'].join('\n');
   const run = await runPine({ source: src, klines: toKlines(bars), timeframe: '5' }, { priority: true });
@@ -63,6 +68,12 @@ export async function t0SelfCheck(tc, targets) {
     if (b.code === NO_INTRABARS ? n[i] !== 0 || isF(d[i]) : n[i] !== STUB_K || Math.abs(d[i] - exp) > 1e-9 * Math.max(1, Math.abs(exp))) bad++;
   });
   tc.check(bad === 0, `stub LTF: ${STUB_K} intrabars por barra; a soma é o delta decodificado de time % 1000 (código 999 → sem intrabars)`, `${bad}/${bars.length} barras divergentes`);
+  const v = run.plots.get('v'), vna = run.plots.get('vna');
+  const naBars = bars.map((b, i) => (Number.isFinite(b.volume) ? -1 : i)).filter((i) => i >= 0);
+  let vbad = 0;
+  bars.forEach((b, i) => { const e = stubVol(b.code, b.volume); if (isF(e) !== isF(v[i]) || (isF(e) && Math.abs(v[i] - e) > 1e-9 * Math.max(1, e))) vbad++; });
+  tc.check(vbad === 0 && naBars.length === 3 && naBars.every((i) => vna[i] === 1), `stub LTF: volume dos intrabars = volume do gráfico; com o volume do gráfico na (NaN no provider → na(volume)) = ${STUB_NA_VOL}`,
+    `${vbad} barras divergentes; na(volume) em ${naBars.filter((i) => vna[i] === 1).length}/${naBars.length}`);
   let qbad = 0;
   for (let q = -1; q <= 1.0000001; q += 0.001) if (Math.abs(decodeQ(encodeQ(q)) - q) > 0.5 / 499 + 1e-12) qbad++;
   tc.check(qbad === 0, 'canal: erro de quantização ≤ 1/998 em Δ/V');
@@ -207,6 +218,8 @@ export async function t5Null(tc, target, { nBars = 4500 } = {}) {
   const rho = optRole(target, run, 'rho');
   const gateFrac = gate ? gate.values.filter((v) => v === 1).length / Math.max(1, gate.values.filter(isF).length) : NaN;
   tc.note(`Z: média ${fmt(ms.mean)}, dp ${fmt(ms.sd)}; ρ mediano ${rho ? fmt(quantile(rho.values, 0.5)) : 'n/d'}` + (gate ? `; gate aberto em ${pct(gateFrac)} das barras` : ''));
+  // frequência empírica de |Z| mostrada na dica do Z (contadores do indicador) = recontagem a partir dos plots
+  if (/Frequência empírica neste gráfico/.test(target.source)) checkZFreq(tc, target, run, params(target), 'série nula');
   return run;
 }
 
@@ -253,41 +266,57 @@ const FULL_EVENTS_RE = /"Preço travado sob compras extremas"/;
 
 /**
  * Referência da divergência por pivots (METODOLOGIA §8, dossier §6.6) a partir do OHLC e dos plots do indicador (delta → CVD
- * contínuo, σΔ desfasado, qualidade → hqRun). Pivots com a regra de empates do PineTS (à esquerda só um valor
- * estritamente maior desqualifica; à direita ≥ desqualifica). Devolve as barras de confirmação {top, bot}.
+ * contínuo, σΔ desfasado, qualidade). Pivots com a regra de empates do PineTS (à esquerda só um valor estritamente maior
+ * desqualifica; à direita ≥ desqualifica). Os dois pivots têm de estar no mesmo regime de qualidade ≥ média: nenhuma
+ * barra OBSERVADA com qualidade < média entre o pivot anterior e a confirmação (lqBar; as barras sem observação de fluxo,
+ * noObs, não contam). O CVD contínuo soma o delta da barra (0 sem negócios; na com volume em falta = sem incremento).
+ * Devolve as barras de confirmação {top, bot} e, por divergência, {i, last, noObs: nº de barras sem observação no meio}.
  */
-function pivotRef(data, run, target, pv) {
+function pivotRef(data, run, target, pv, noObs = null) {
   const n = data.bars.length, { L, R } = pv;
   const hi = data.bars.map((b) => b.high), lo = data.bars.map((b) => b.low);
   const dl = optRole(target, run, 'delta'), sd = optRole(target, run, 'sd'), tr = optRole(target, run, 'tier');
   if (!dl || !sd || !tr) return null;
   const cvdC = new Float64Array(n).fill(NaN);
   for (let i = 0, c = NaN; i < n; i++) { if (isF(dl.values[i])) c = (isF(c) ? c : 0) + dl.values[i]; cvdC[i] = c; }
-  const top = [], bot = [];
-  let run2 = 0, lastPh = NaN, lastPhCvd = NaN, lastPhBar = NaN, lastPl = NaN, lastPlCvd = NaN, lastPlBar = NaN;
+  const nObsBefore = new Int32Array(n + 1);
+  for (let i = 0; i < n; i++) nObsBefore[i + 1] = nObsBefore[i] + (noObs && noObs[i] ? 1 : 0);
+  const top = [], bot = [], spans = [];
+  let lqBar = -1, lastPh = NaN, lastPhCvd = NaN, lastPhBar = NaN, lastPl = NaN, lastPlCvd = NaN, lastPlBar = NaN, nBlocked = 0;
+  // regras alternativas (só para medir o poder discriminante dos dados): hqRun em observações comparado com as barras desde
+  // o pivot anterior, e lqBar actualizado também nas barras sem observação
+  let hqRunObs = 0, lqBarAll = -1;
   for (let i = 0; i < n; i++) {
-    run2 = tr.values[i] >= 2 ? run2 + 1 : 0;
+    const obs = !(noObs && noObs[i]);
+    if (obs && tr.values[i] < 2) lqBar = i;
+    if (obs) hqRunObs = tr.values[i] >= 2 ? hqRunObs + 1 : 0;
+    if (tr.values[i] < 2) lqBarAll = i;
     if (i < L + R) continue;
     const c = i - R, sdP = sd.values[i], cvdAt = cvdC[c];
     let okH = true, okL = true;
     for (let j = 1; j <= L; j++) { if (hi[c - j] > hi[c]) okH = false; if (lo[c - j] < lo[c]) okL = false; }
     for (let j = 1; j <= R; j++) { if (hi[c + j] >= hi[c]) okH = false; if (lo[c + j] <= lo[c]) okL = false; }
+    const span = (last) => ({ i, last, noObs: nObsBefore[i + 1] - nObsBefore[last], obsCountRule: hqRunObs > i - last, lqAllRule: lqBarAll < last });
     if (okH) {
       if (isF(lastPhBar) && isF(cvdAt) && isF(lastPhCvd) && sdP > 0) {
         const gap = c - lastPhBar;
-        if (gap >= pv.min && gap <= pv.max && run2 > i - lastPhBar && hi[c] > lastPh && cvdAt <= lastPhCvd - pv.mag * sdP) top.push(i);
+        if (gap >= pv.min && gap <= pv.max && hi[c] > lastPh && cvdAt <= lastPhCvd - pv.mag * sdP) {
+          if (lqBar < lastPhBar) { top.push(i); spans.push(span(lastPhBar)); } else nBlocked++;
+        }
       }
       lastPh = hi[c]; lastPhCvd = cvdAt; lastPhBar = c;
     }
     if (okL) {
       if (isF(lastPlBar) && isF(cvdAt) && isF(lastPlCvd) && sdP > 0) {
         const gap = c - lastPlBar;
-        if (gap >= pv.min && gap <= pv.max && run2 > i - lastPlBar && lo[c] < lastPl && cvdAt >= lastPlCvd + pv.mag * sdP) bot.push(i);
+        if (gap >= pv.min && gap <= pv.max && lo[c] < lastPl && cvdAt >= lastPlCvd + pv.mag * sdP) {
+          if (lqBar < lastPlBar) { bot.push(i); spans.push(span(lastPlBar)); } else nBlocked++;
+        }
       }
       lastPl = lo[c]; lastPlCvd = cvdAt; lastPlBar = c;
     }
   }
-  return { top, bot };
+  return { top, bot, spans, nBlocked };
 }
 const setMinus = (a, b) => { const B = new Set(b); return a.filter((x) => !B.has(x)); };
 const sameSet = (a, b) => a.length === b.length && setMinus(a, b).length === 0 && setMinus(b, a).length === 0;
@@ -299,7 +328,7 @@ const sameSet = (a, b) => a.length === b.length && setMinus(a, b).length === 0 &
  * igualdade com as etiquetas e os alertas emitidos. Usa os inputs por omissão (eventos e baixa confiança ligados).
  * Não verifica o cálculo de zF/zP (isso é o T8, contra a referência JS).
  */
-export function auditEvents(tc, target, run, data, P, name, { piv = false } = {}) {
+export function auditEvents(tc, target, run, data, P, name, { piv = false, noObs = null } = {}) {
   if (!FULL_EVENTS_RE.test(target.source)) { tc.skip(`${name}: auditoria de eventos (o alvo não tem a camada de eventos completa)`); return; }
   const g = (role) => optRole(target, run, role);
   const zF = g('zF'), zP = g('zP'), gate = g('gate'), tier = g('tier'), Z = g('z'), rho = g('rho');
@@ -317,20 +346,29 @@ export function auditEvents(tc, target, run, data, P, name, { piv = false } = {}
     pwf[i] = !abs[i] && Math.abs(Pz[i]) >= P.zf && sgn(Pz[i]) * F[i] <= 0 ? 1 : 0;
   }
   const tierOk = (i) => T[i] >= 3 || T[i] === 2;
+  // barras sem observação de fluxo (volume da fonte em falta ou nulo): da execução (T12) ou do motor de referência do stub
+  const nob = noObs ?? stubDeltaTier(data).noObs;
+  const obsIdx = new Int32Array(n);
+  for (let i = 0, c = 0; i < n; i++) { if (!nob[i]) c++; obsIdx[i] = c; }
   // 1.ª barra de cada aglomerado, por classe E por lado: novo quando o lado muda ou quando a última barra da mesma classe
-  // e do mesmo lado ficou a mais de ke barras (período refractário de ke barras; com ke = 1 = "cond e não cond[1]").
-  const clusterStarts = (cls, sideOf) => {
+  // e do mesmo lado ficou a mais de ke OBSERVAÇÕES (período refractário de ke observações, a unidade da janela do zF/zP: as
+  // barras sem observação de fluxo não contam; com ke = 1 e sem barras sem observação = "cond e não cond[1]").
+  // nMerged: barras que uma regra em barras (bar_index − última ≤ ke) teria tornado o início de um aglomerado novo.
+  let nMerged = 0;
+  const clusterStarts = (cls, sideOf, okFn = () => true) => {
     const out = new Uint8Array(n);
     let lastBar = NaN, lastSide = 0;
     for (let i = 0; i < n; i++) {
       if (!cls[i]) continue;
       const sd = sideOf(i);
-      out[i] = lastSide === sd && isF(lastBar) && i - lastBar <= P.ke ? 0 : 1;
+      const same = lastSide === sd && isF(lastBar);
+      out[i] = same && obsIdx[i] - obsIdx[lastBar] <= P.ke ? 0 : 1;
+      if (same && out[i] === 0 && i - lastBar > P.ke && okFn(i)) nMerged++;
       lastBar = i; lastSide = sd;
     }
     return out;
   };
-  const absNew = clusterStarts(abs, (i) => sgn(F[i])), pinNew = clusterStarts(pin, (i) => sgn(F[i])), pwfNew = clusterStarts(pwf, (i) => sgn(Pz[i]));
+  const absNew = clusterStarts(abs, (i) => sgn(F[i]), tierOk), pinNew = clusterStarts(pin, (i) => sgn(F[i]), tierOk), pwfNew = clusterStarts(pwf, (i) => sgn(Pz[i]), tierOk);
   // Diferenças face à regra antiga "cond e não cond[1]" (só informativo): inversões de lado em barras seguidas e
   // reinícios do mesmo lado suprimidos pelo período refractário.
   let nFlip = 0, nRefr = 0;
@@ -355,7 +393,7 @@ export function auditEvents(tc, target, run, data, P, name, { piv = false } = {}
   const pinTag = new Set();   // eventos que ganham "· preço travado" depois da 1.ª barra
   let ev = null, absStart = NaN;
   // divergência por pivots (só com pivIn ligado): referência independente; sem pivIn não pode haver alertas de pivot
-  const pr = piv ? pivotRef(data, run, target, P.piv) : { top: [], bot: [] };
+  const pr = piv ? pivotRef(data, run, target, P.piv, nob) : { top: [], bot: [] };
   if (!pr) { tc.fail(`${name}: plots delta/σΔ/qualidade para a referência dos pivots`); return; }
   const pivTopSet = new Set(pr.top), pivBotSet = new Set(pr.bot);
   exp.pivT = pr.top.slice(); exp.pivB = pr.bot.slice();
@@ -486,9 +524,9 @@ export function auditEvents(tc, target, run, data, P, name, { piv = false } = {}
     if (nSt) tc.check(badSt === 0, `${name}: texto do estado nas mensagens alert() dos cruzamentos de Z = sinal de Z + perna dominante (|F_K| vs |P_K|)`, exSt.join('; ') || `${nSt} mensagens`);
   }
   tc.note(`${name}: ${absL.length} absorções (${Object.entries(resCount).map(([k, v]) => `${k} ${v}`).join(', ')}), ${pwfL.length} preço sem fluxo, ${exp.pinB.length + exp.pinS.length} travados com alerta, ${exp.zUp.length + exp.zDn.length} alertas de Z` +
-    ` (sem alerta por calibração: ${nWeakSkipped} eventos, ${nZProvSkipped} cruzamentos de Z; aglomerados: ${nFlip} inversões de lado em barras seguidas, ${nRefr} reinícios refractários)` +
+    ` (sem alerta por calibração: ${nWeakSkipped} eventos, ${nZProvSkipped} cruzamentos de Z; aglomerados: ${nFlip} inversões de lado em barras seguidas, ${nRefr} reinícios refractários, ${nMerged} continuados através de barras sem observação)` +
     (piv ? `, pivots: ${pr.top.length} topos e ${pr.bot.length} fundos` : ''));
-  return { nFlip, nRefr, absBars, sides: absBars.map((i) => sgn(F[i])) };
+  return { nFlip, nRefr, nMerged, absBars, sides: absBars.map((i) => sgn(F[i])), piv: pr };
 }
 
 export async function t6Detection(tc, target, { quick = false } = {}) {
@@ -605,15 +643,16 @@ function cmpClose(tc, label, idx, got, want, rel = 1e-6, abs = 1e-7) {
 
 /**
  * Âncoras esperadas (METODOLOGIA §4.2 e §4.4): 1.ª barra, mudanças de calendário e — se o σ/ρ congelado na âncora veio de
- * uma janela com barras de qualidade ≤ baixa — a 1.ª barra de qualidade ≥ média cuja janela σ/ρ desfasada (N barras)
- * está toda em qualidade ≥ média (reinício na costura da cobertura). sdP/srP: plots σΔ/σr do indicador.
+ * uma janela com barras de qualidade ≤ baixa — a 1.ª barra de qualidade ≥ média cuja janela σ/ρ desfasada (N observações)
+ * está toda em qualidade ≥ média (reinício na costura da cobertura). sdP/srP: plots σΔ/σr do indicador; noObs: barras sem
+ * observação de fluxo (não contam nem partem a sequência).
  */
-function expectedAnchors(data, tier, srP, sdP, N, keyFn) {
+function expectedAnchors(data, tier, srP, sdP, N, keyFn, noObs = null) {
   const n = data.bars.length, out = [];
   let run = 0, runP = 0, ok = false, fine = false, init = false;
   for (let t = 0; t < n; t++) {
     runP = run;
-    run = tier[t] >= 2 ? run + 1 : 0;
+    if (!(noObs && noObs[t])) run = tier[t] >= 2 ? run + 1 : 0; // hqRun: observações seguidas de qualidade ≥ média
     const winFine = runP >= N;
     const cal = t > 0 && keyFn(data.bars[t].openTime) !== keyFn(data.bars[t - 1].openTime);
     const seam = init && ok && !fine && winFine && tier[t] >= 2 && !cal;
@@ -822,19 +861,21 @@ function t8Sets(quick) {
   return [nullData(4500), gapData(), jumpData(), jumpData({ noIntrabarsProb: 0.003 }), ...(quick ? [] : [absorptionData({ count: 10 })])];
 }
 
-/** Delta e tier por barra como o indicador os vê com o stub: barras sem intrabars → BVC na barra, tier 1. */
-function stubDeltaTier(data) {
+/** Fonte fina do stub por barra: { delta, vol, tier } com intrabars, null sem intrabars (código 999). */
+function stubFine(data, tier = 3) {
+  return data.bars.map((b) => (b.code === NO_INTRABARS ? null : { delta: stubDelta(b.code, b.volume), vol: stubVol(b.code, b.volume), tier }));
+}
+
+/**
+ * Delta e tier por barra como o indicador os vê (refEngine): fonte fina = stub (tier 3, precisão 1S) ou `fine`; barras sem
+ * a fonte fina → BVC na barra, tier 1; barras sem observação de fluxo (volume da fonte em falta ou nulo) → delta na/0,
+ * tier anterior, fora das estatísticas (noObs).
+ */
+function stubDeltaTier(data, { fine = null, barOnly = false, fallback = 'bvc' } = {}) {
   const close = arr(data, (b) => b.close), open = arr(data, (b) => b.open), vol = arr(data, (b) => b.volume);
   const rBar = computeRBar(open, close, data.bars.map((b) => b.openTime));
   const barDelta = computeBarDelta(rBar, vol);
-  const n = data.bars.length;
-  const delta = new Float64Array(n), tier = new Float64Array(n);
-  for (let t = 0; t < n; t++) {
-    const noIntra = data.bars[t].code === NO_INTRABARS;
-    delta[t] = vol[t] === 0 ? 0 : noIntra ? barDelta[t] : stubDelta(data.bars[t].code, vol[t]);
-    tier[t] = vol[t] === 0 ? (t > 0 ? tier[t - 1] : 0) : noIntra ? 1 : 3;
-  }
-  return { rBar, delta, tier };
+  return { rBar, barDelta, ...refEngine({ fine: fine ?? stubFine(data), barDelta, chartVol: vol, barOnly, fallback }) };
 }
 
 export async function t8Reference(tc, target, { quick = false } = {}) {
@@ -843,8 +884,8 @@ export async function t8Reference(tc, target, { quick = false } = {}) {
     const run = await target.run(data, statWanted(target));
     const z = requireRole(tc, target, run, 'z', 'Z');
     if (!z) return;
-    const { rBar, delta, tier } = stubDeltaTier(data);
-    const ref = computeRef({ rBar, delta, tier, opts: P });
+    const { rBar, delta, tier, noObs } = stubDeltaTier(data);
+    const ref = computeRef({ rBar, delta, tier, noObs, opts: P });
     const warm = 3 * P.N + P.K;
     const { r, n } = pearsonArr(z.values, ref.Z, warm);
     tc.check(r >= 0.98, `${data.id}: corr(Z Pine, Z referência JS) ≥ 0.98`, `r = ${fmt(r, 5)} em ${n} barras`);
@@ -1077,6 +1118,52 @@ export async function t10NativeLtf(tc, target) {
     const txt = tableText(run);
     tc.check(/⚠[^\n]*poucos intrabars/.test(txt) && /2\.0 de 5 possíveis/.test(txt), 'intrabars esparsos: tabela com «⚠ poucos intrabars» (2.0 de 5 possíveis)', txt.split('\n').slice(0, 4).join(' | ').slice(0, 240));
   }
+  // Volume em falta nos intrabars (pedido nativo): o ltfSigned devolve o volume tal como vem (na ≠ 0) e um intrabar sem
+  // volume deixa a barra incompleta → volume em falta (delta na, qualidade anterior, linha interrompida), mesmo com o volume
+  // do gráfico presente; os 5 intrabars com volume 0 → sem negócios (delta 0, linha contínua e parada). Mutante: o 3.º
+  // elemento do tuplo com nz(volume) (a falta conta como 0) tem de falhar.
+  if (target.info.edition !== 'standin' && T12_RE.test(target.source)) {
+    const nv = nativeNaVolData();
+    const opts = { stub: false, ltfBars: { 1: nv.subs } };
+    const mut = mutantTarget(target, LTF_NZVOL_RULES, 'mutante: volume dos intrabars com nz');
+    const pr = target.run(nv, runs[0].wanted, opts), pm = mut ? mut.run(nv, runs[0].wanted, opts) : null;
+    let run;
+    try { run = await pr; } catch (e) { tc.fail('volume em falta nos intrabars: executa sem excepções', String(e.message || e).split('\n')[0]); return; }
+    t10NaVolChecks(tc, target, run, nv, 'volume em falta nos intrabars');
+    if (!pm) { tc.check(false, 'mutante «volume dos intrabars com nz» construído (padrão do ltfSigned encontrado)', 'actualizar LTF_NZVOL_RULES em tests/lib/tests_runtime.mjs', 'warn'); return; }
+    const rec = new TestCase('T10m', 'mutante');
+    t10NaVolChecks(rec, mut, await pm, nv, 'mutante');
+    const failed = rec.checks.filter((c) => c.status === STATUS.FAIL);
+    tc.check(failed.length > 0, 'mutação: com nz(volume) no volume devolvido pelo ltfSigned (falta = 0) a barra sem volume nos intrabars passa a «sem negócios» e o T10 falha',
+      `${failed.length}/${rec.checks.length} verificações falham no mutante`);
+  }
+}
+
+/** Mutante do T10: o ltfSigned devolve nz(volume) como volume (a falta de volume nos intrabars conta como volume 0). */
+const LTF_NZVOL_RULES = [[/\[dir \* v, v \* \(2\.0 \* normCdf\(z\) - 1\.0\), volume\]/, () => '[dir * v, v * (2.0 * normCdf(z) - 1.0), v]']];
+
+/** T10: barras com volume em falta ou nulo nos intrabars (nativeNaVolData) contra a referência de ltfSigned. */
+function t10NaVolChecks(tc, target, run, nv, name) {
+  const mk = nv.marks, n = nv.klines.length;
+  const ref = refLtfSigned(nv.subs, nv.per);
+  const miss = [...mk.allNa, ...mk.allNaChart, ...mk.partNa, mk.last];
+  const d = optRole(target, run, 'delta'), tr = optRole(target, run, 'tier'), fl = optRole(target, run, 'fLine');
+  if (!d || !tr || !fl) { tc.fail(`${name}: plots delta/qualidade/linha do fluxo`); return; }
+  // delta esperado: na com volume em falta na fonte (algum intrabar sem volume), 0 sem negócios, senão a regra da vela
+  const exp = range(0, n).map((t) => (!isF(ref.vol[t]) ? NaN : ref.vol[t] === 0 ? 0 : ref.cand[t]));
+  const bad = range(0, n).filter((t) => (isF(exp[t]) ? !(Math.abs(d.values[t] - exp[t]) <= 1e-7) : isF(d.values[t])));
+  tc.check(bad.length === 0 && miss.every((t) => !isF(exp[t])) && mk.zero.every((t) => exp[t] === 0),
+    `${name}: delta na nas ${miss.length} barras com intrabars sem volume (todos, todos com o volume do gráfico presente, 2 de 5), 0 com os intrabars todos de volume 0, regra da vela nas restantes`,
+    `${bad.length} divergentes${bad.length ? ` (${bad.slice(0, 5).map((t) => `@${t}: ${fmt(d.values[t], 3)} vs ${fmt(exp[t], 3)}`).join(', ')})` : ''}`);
+  tc.check(Array.from(tr.values).every((v) => v === 2), `${name}: qualidade 2 em todas as barras (as barras sem observação herdam a da anterior)`, `valores: ${[...new Set(Array.from(tr.values))].join(',')}`);
+  const brk = miss.filter((t) => isF(fl.values[t]));
+  const cont = mk.zero.filter((t) => !(isF(fl.values[t]) && Math.abs(fl.values[t] - fl.values[t - 1]) <= 1e-9));
+  tc.check(brk.length === 0 && cont.length === 0, `${name}: linha do fluxo interrompida com volume em falta nos intrabars, contínua e parada sem negócios`,
+    `${brk.length} contínuas com volume em falta, ${cont.length} sem negócios com variação ou na`);
+  const txt = tableText(run);
+  tc.check(/Sem volume nesta barra \(dados em falta\)/.test(txt) && /volume em falta \(intrabar [^)]*\) · qualidade anterior: média/.test(txt),
+    `${name}: última barra (intrabars sem volume) → estado «Sem volume nesta barra (dados em falta)» e fonte «volume em falta (intrabar …) · qualidade anterior: média»`,
+    txt.split('\n').slice(0, 3).join(' | ').slice(0, 240));
 }
 
 // ───────────────────────────── T11 ─────────────────────────────
@@ -1196,6 +1283,381 @@ export async function t11Timeframes(tc, target) {
   }
 }
 
+// ───────────────────────────── T12 ─────────────────────────────
+// Integridade do volume (indicador, 6.5): uma barra cujo volume da FONTE escolhida falta (na) ou é nulo não é uma
+// observação de fluxo. Fica fora de σ, ρ, D, Z, zF/zP e dos eventos, não conta nem parte a sequência de qualidade (hqRun
+// em observações), mantém o tier anterior; as linhas continuam (incremento 0) sem negócios e interrompem-se com volume em
+// falta. O volume que conta é o da fonte (intrabars/footprint), não o do gráfico.
+const T12_RE = /\bnoObs\b/;
+
+function t12Wanted(target) {
+  const main = { ...statWanted(target), ...(target.hasInput('pivIn') ? { pivIn: true } : {}) };
+  const w = { main, bar: { srcIn: target.option('srcIn', 'bar'), modeIn: target.option('modeIn', 'sig') }, state: statWanted(target) };
+  let fpSrc = null;
+  try { fpSrc = target.option('srcIn', 'fp'); } catch { /* Standard: sem footprint */ }
+  if (fpSrc) w.fp = { srcIn: fpSrc, modeIn: target.option('modeIn', 'sig'), ...(target.hasInput('fpFillIn') ? { fpFillIn: false } : {}) };
+  if (target.hasInput('fallbackIn')) w.fbNone = { ...statWanted(target), fallbackIn: target.option('fallbackIn', 'none') };
+  return w;
+}
+
+/**
+ * Mutante «regra antiga» (antes da integridade do volume): nz(volume) no BVC na barra e no volume da fonte do fallback, e
+ * volume 0 do GRÁFICO → delta 0 e tier anterior, mas a barra continua a ser uma observação (r e Δ = 0 entram em σ, ρ, Z
+ * e eventos; o volume em falta conta como 0; o volume do gráfico anula o delta dos intrabars/footprint).
+ */
+const OLD_VOLUME_RULES = [
+  [/float vol0\s*=\s*nz\(volume\)/, (m) => m],
+  [/float barDelta = volume \*/, () => 'float barDelta = nz(volume) *'],
+  [/barVol := volume\b/g, () => 'barVol := vol0'],
+  [/bool\s+volMiss\s*=\s*tier > 0 and na\(barVol\)/, () => 'bool volMiss = false'],
+  [/bool\s+noTrade\s*=\s*not na\(obsVol\) and obsVol == 0/, () => 'bool noTrade = false'],
+  [/if noObs\n    delta := volMiss \? na : 0\.0\n    tier  := tierP/, () => 'if vol0 == 0\n    delta  := 0.0\n    barVol := 0.0\n    tier   := tierP'],
+];
+
+/** Alvo mutante em memória (o ficheiro nunca é alterado); null se algum padrão não existir no código. */
+function mutantTarget(target, rules, tag) {
+  let src = target.source;
+  for (const [re, rep] of rules) {
+    re.lastIndex = 0;
+    if (!re.test(src)) return null;
+    re.lastIndex = 0;
+    src = src.replace(re, rep);
+  }
+  const mut = Object.create(Object.getPrototypeOf(target));
+  Object.assign(mut, target, { source: src, code: preprocess(src, { stub: true, shims: target.shims }).code,
+    codeNoStub: preprocess(src, { stub: false, shims: target.shims }).code, runs: new Map(),
+    info: { ...target.info, label: `${target.info.label} (${tag})` } });
+  return mut;
+}
+
+function t12Mutant(target) {
+  if (!('_t12mut' in target)) target._t12mut = mutantTarget(target, OLD_VOLUME_RULES, 'mutante: regra antiga nz(volume)');
+  return target._t12mut;
+}
+
+/**
+ * Mutante «sem negócios só com fonte»: a regra das barras sem observação exige uma fonte (tier > 0), como na 1.ª versão;
+ * com «Barras sem intrabars» = Nenhum uma barra de volume 0 sem intrabars ficava «sem dados» (tier 0) e partia a sequência.
+ */
+const NOTRADE_TIER_RULES = [[/bool\s+noTrade\s*=\s*not na\(obsVol\) and obsVol == 0/, () => 'bool noTrade = tier > 0 and not na(barVol) and barVol == 0']];
+function t12MutantF1(target) {
+  if (!('_t12mutF1' in target)) target._t12mutF1 = mutantTarget(target, NOTRADE_TIER_RULES, 'mutante: sem negócios só com fonte');
+  return target._t12mutF1;
+}
+
+/** Execuções do T12 (lançadas também pelo prefetch). mutant = só as execuções que o mutante repete. */
+function t12Start(target, { mutant = false } = {}) {
+  const data = volIntegrityData();
+  const W = t12Wanted(target);
+  const out = { main: target.run(data, W.main) };
+  if (W.fp) { const { footprint } = volIntegrityFootprint(data); out.fp = target.run(data, W.fp, { footprint, fpTag: 'volint' }); }
+  if (!mutant) {
+    out.bar = target.run(data, W.bar);
+    out.stMiss = target.run(volStateData('miss'), W.state);
+    out.stZero = target.run(volStateData('zero'), W.state);
+    if (W.fbNone) out.fbNone = target.run(data, W.fbNone);
+    out.gap = target.run(clusterGapData(), W.state);
+    const mF1 = W.fbNone ? t12MutantF1(target) : null;
+    if (mF1) out.fbNoneMutF1 = mF1.run(data, W.fbNone);
+  }
+  return out;
+}
+
+/** Referência de uma execução: motor (refEngine) com a fonte fina dada (stub ou footprint) e estatísticas (computeRef). */
+function t12Ref(target, data, { fpBar = null, barOnly = false, fallback = 'bvc' } = {}) {
+  const P = params(target);
+  const fine = fpBar ? fpBar.map((f) => (f ? { ...f, tier: 3 } : null)) : null;
+  const eng = stubDeltaTier(data, { fine, barOnly, fallback });
+  const ref = computeRef({ rBar: eng.rBar, delta: eng.delta, tier: eng.tier, noObs: eng.noObs, opts: P });
+  return { P, eng, ref };
+}
+
+const sameNum = (a, b, rel = 1e-9, abs = 1e-9) => (isF(a) ? isF(b) && Math.abs(a - b) <= Math.max(abs, rel * Math.abs(b)) : !isF(b));
+const idxWhere = (n, f) => range(0, n).filter(f);
+
+/** Compara uma série do indicador com a da referência em todas as barras (definida nas mesmas barras e igual). */
+function cmpDefined(tc, label, got, want, { from = 0, rel = 1e-6, abs = 1e-6, level = 'fail' } = {}) {
+  let one = 0, bad = 0, nDef = 0, worst = 0, worstAt = -1, firstOne = -1;
+  for (let t = from; t < want.length; t++) {
+    if (isF(got[t]) !== isF(want[t])) { one++; if (firstOne < 0) firstOne = t; continue; }
+    if (!isF(want[t])) continue;
+    nDef++;
+    const err = Math.abs(got[t] - want[t]);
+    if (err > Math.max(abs, rel * Math.abs(want[t]))) bad++;
+    if (err > worst) { worst = err; worstAt = t; }
+  }
+  return tc.check(one === 0 && bad === 0 && nDef > 0, label, `${nDef} barras definidas; ${one} só num lado${firstOne >= 0 ? ` (1.ª @${firstOne})` : ''}; ${bad} fora da tolerância (máx |Δ| ${fmt(worst, 9)} @${worstAt})`, level);
+}
+
+/**
+ * Lê os contadores de frequência empírica de Z da dica da célula do Z (tabela): barras com Z e calibração ≥ 2N (zN),
+ * P(|Z| ≥ limiar), P(|Z| ≥ limiar forte), a parte dessas barras com o gate aberto (pGo) e P(|Z| ≥ limiar | gate aberto)
+ * (pG; null com o gate sempre fechado).
+ */
+export function zFreqFromTable(run) {
+  const m = tableText(run).match(/Frequência empírica neste gráfico \((\d+) barras com Z e ≥ (\d+) valores de calibração\): \|Z\| ≥ ([\d.]+) em ([\d.]+)%, ≥ ([\d.]+) em ([\d.]+)%; (?:com o gate aberto \(([\d.]+)% dessas barras\), \|Z\| ≥ [\d.]+ em ([\d.]+)%|gate sempre fechado nessas barras)/);
+  return m ? { zN: Number(m[1]), nCal: Number(m[2]), thr: Number(m[3]), p1: Number(m[4]), thr2: Number(m[5]), p2: Number(m[6]),
+    pGo: m[7] === undefined ? 0 : Number(m[7]), pG: m[8] === undefined ? null : Number(m[8]) } : null;
+}
+
+/**
+ * Recontagem dos contadores a partir dos plots Z e gate (barras fechadas): só as barras com Z e calibração ≥ 2N valores
+ * (como os alertas de Z: n_cal(i) = N + nº de Z finitos antes de i ≥ 2N).
+ */
+export function zFreqRecount(Zv, Gv, P) {
+  let zN = 0, zN1 = 0, zN2 = 0, zNGo = 0, zNG = 0, before = 0;
+  const cal = new Uint8Array(Zv.length);
+  for (let t = 0; t < Zv.length; t++) {
+    const z = Zv[t];
+    if (!isF(z)) continue;
+    if (P.N + before >= 2 * P.N) {
+      cal[t] = 1;
+      zN++; if (Math.abs(z) >= P.thr) zN1++; if (Math.abs(z) >= P.thr2) zN2++;
+      if (Gv[t] === 1) { zNGo++; if (Math.abs(z) >= P.thr) zNG++; }
+    }
+    before++;
+  }
+  return { zN, zN1, zN2, zNGo, zNG, cal };
+}
+
+/** Contadores de frequência (zN, zN1, zN2, zNGo, zNG) da tabela = recontagem a partir dos plots Z e gate. */
+export function checkZFreq(tc, target, run, P, name) {
+  const Z = optRole(target, run, 'z'), G = optRole(target, run, 'gate');
+  if (!Z || !G) { tc.fail(`${name}: plots Z/gate para recontar a frequência de |Z|`); return; }
+  const { zN, zN1, zN2, zNGo, zNG } = zFreqRecount(Z.values, G.values, P);
+  const f = zFreqFromTable(run);
+  if (!zN) { tc.check(!f, `${name}: sem Z com calibração ≥ 2N → sem frequência empírica na dica`); return; }
+  if (!f) { tc.fail(`${name}: dica do Z com a frequência empírica de |Z|`, tableText(run).split('\n').filter((l) => /Z/.test(l)).slice(0, 3).join(' | ').slice(0, 240)); return; }
+  // percentagens com 1, 2, 1 e 1 casas decimais: tolerância de meia unidade da última casa (arredondamento)
+  const okP = (got, cnt, den, dec) => Math.abs(got - (100 * cnt) / den) <= 0.5 * 10 ** -dec + 1e-9;
+  const okG = zNGo === 0 ? f.pG === null && f.pGo === 0 : f.pG !== null && okP(f.pGo, zNGo, zN, 1) && okP(f.pG, zNG, zNGo, 1);
+  const ok = f.zN === zN && f.nCal === 2 * P.N && f.thr === P.thr && f.thr2 === P.thr2 && okP(f.p1, zN1, zN, 1) && okP(f.p2, zN2, zN, 2) && okG;
+  tc.check(ok, `${name}: frequência empírica de |Z| na dica (barras com Z e ≥ 2N valores de calibração; |Z| ≥ ${P.thr}, ≥ ${P.thr2}; gate aberto e |Z| ≥ ${P.thr} condicional ao gate) = recontagem a partir dos plots Z e gate`,
+    `tabela ${f.zN} barras, ${f.p1}% / ${f.p2}% / gate ${f.pGo}% → ${f.pG ?? '—'}%; recontagem ${zN} barras, ${fmt((100 * zN1) / zN, 2)}% / ${fmt((100 * zN2) / zN, 3)}% / gate ${fmt((100 * zNGo) / zN, 2)}% → ${zNGo ? fmt((100 * zNG) / zNGo, 2) : '—'}%`);
+}
+
+/**
+ * Verificações de uma execução de estatística (fonte fina com qualidade alta) contra a referência com a regra das barras
+ * sem observação. Também usadas no mutante (onde têm de falhar).
+ */
+function t12StatChecks(tc, target, run, data, { P, eng, ref }, name) {
+  const n = data.bars.length;
+  const g = (role) => optRole(target, run, role);
+  const dl = g('delta'), tr = g('tier'), Z = g('z'), zF = g('zF'), zP = g('zP'), gate = g('gate');
+  if (!dl || !tr || !Z || !zF || !zP || !gate) { tc.fail(`${name}: plots delta/qualidade/Z/zF/zP/gate`); return false; }
+  const noObs = idxWhere(n, (t) => eng.noObs[t]), volMiss = idxWhere(n, (t) => eng.volMiss[t]), noTrade = idxWhere(n, (t) => eng.noTrade[t]);
+  // (1) motor: delta e qualidade por barra = referência (na com volume em falta, 0 sem negócios, tier anterior)
+  const badD = idxWhere(n, (t) => !sameNum(dl.values[t], eng.delta[t], 1e-9, 1e-9)), badT = idxWhere(n, (t) => tr.values[t] !== eng.tier[t]);
+  tc.check(badD.length === 0 && badT.length === 0, `${name}: delta e qualidade por barra = motor de referência (volume da fonte em falta → delta na; nulo → 0; tier da barra anterior em ambos)`,
+    `${badD.length} deltas e ${badT.length} tiers divergentes${badD.length ? ` (1.º @${badD[0]}: ${fmt(dl.values[badD[0]], 4)} vs ${fmt(eng.delta[badD[0]], 4)})` : ''}; ${volMiss.length} barras com volume em falta, ${noTrade.length} sem negócios`);
+  // (2) estatística: as barras sem observação não entram em σ, ρ, D (Z), zF/zP, pernas nem η — igualdade exacta com a referência
+  cmpDefined(tc, `${name}: Z definido nas mesmas barras e igual à referência com as barras sem observação fora de σ/ρ/D/RMS (≤ 1e-6)`, Z.values, ref.Z);
+  cmpDefined(tc, `${name}: zF = referência (≤ 1e-6)`, zF.values, ref.zF);
+  cmpDefined(tc, `${name}: zP = referência (≤ 1e-6)`, zP.values, ref.zP);
+  for (const [role, want, lab] of [['sr', ref.srP, 'σr desfasado'], ['sd', ref.sdP, 'σΔ desfasado'], ['rho', ref.rhoP, 'ρ desfasado']]) {
+    const p = g(role);
+    if (p) cmpDefined(tc, `${name}: ${lab} = referência (janela de N observações; as barras sem observação não entram)`, p.values, want, { rel: 1e-6, abs: 1e-9 });
+  }
+  for (const [role, want, lab] of [['pLeg', ref.pLeg, 'P_K'], ['fLeg', ref.fLeg, 'F_K'], ['eta', ref.eta, 'η']]) {
+    const p = target.info.edition === 'standin' ? null : g(role);
+    if (p) cmpDefined(tc, `${name}: ${lab} = referência (somas em observações)`, p.values, want, { rel: 1e-6, abs: 1e-6 });
+  }
+  // (3) nas barras sem observação: Z, zF, zP na e gate fechado
+  const defAt = noObs.filter((t) => isF(Z.values[t]) || isF(zF.values[t]) || isF(zP.values[t]) || gate.values[t] === 1);
+  tc.check(noObs.length > 0 && defAt.length === 0, `${name}: nas barras sem observação de fluxo Z, zF e zP são na e o gate está fechado`,
+    `${defAt.length}/${noObs.length} barras com valor${defAt.length ? ` (ex.: @${defAt.slice(0, 4).join(',')})` : ''}`);
+  // (4) a sequência de qualidade não é partida: depois de uma barra isolada sem observação (com Z antes), Z logo na seguinte
+  const iso = noObs.filter((t) => t > 0 && t + 1 < n && !eng.noObs[t - 1] && !eng.noObs[t + 1] && isF(Z.values[t - 1]));
+  const lost = iso.filter((t) => !isF(Z.values[t + 1]));
+  tc.check(iso.length > 0 && lost.length === 0, `${name}: barra isolada sem observação não parte a sequência de qualidade (Z definido na barra seguinte)`,
+    `${iso.length - lost.length}/${iso.length} barras${lost.length ? `; sem Z depois de @${lost.slice(0, 5).join(',')}` : ''}`);
+  // (5) linhas (unidades-σ ancoradas): interrompem-se nas âncoras e nas barras sem incremento (volume em falta; com o
+  // fallback «Nenhum», também nas barras sem dados); contínuas sem negócios
+  const pl = g('pLine'), fl = g('fLine'), cvd = g('cvdA'), srR = g('sr'), sdR = g('sd');
+  if (pl && fl && cvd && srR && sdR) {
+    const from = P.N + 5;
+    const anchors = expectedAnchors(data, eng.tier, srR.values, sdR.values, P.N, utcDayKey, eng.noObs).filter((a) => a >= from);
+    const want = [...new Set([...anchors, ...range(from, n).filter((t) => !isF(ref.dDisp[t]))])].sort((a, b) => a - b);
+    const naF = range(from, n).filter((t) => !isF(fl.values[t])), naP = range(from, n).filter((t) => !isF(pl.values[t]));
+    tc.check(sameSet(naF, want) && sameSet(naP, want), `${name}: linhas interrompidas exactamente nas âncoras e nas barras sem incremento (volume em falta${eng.tier.some((v) => v === 0) ? ' ou sem dados' : ''}; contínuas nas barras sem negócios)`,
+      `esperadas ${want.length} (${anchors.length} âncoras + ${want.length - anchors.length} sem incremento, ${volMiss.length} com volume em falta); fluxo ${naF.length}, preço ${naP.length}; só esperadas: ${setMinus(want, naF).slice(0, 4).join(',') || '—'}; só no fluxo: ${setMinus(naF, want).slice(0, 4).join(',') || '—'}`);
+    // CVD ancorado: incremento = dDisp (0 sem negócios, nada com volume em falta), reinício nas âncoras
+    const aSet = new Set(anchors);
+    const badC = range(from, n).filter((t) => {
+      const inc = isF(ref.dDisp[t]) ? ref.dDisp[t] : 0;
+      const e = aSet.has(t) ? inc : cvd.values[t - 1] + inc;
+      return !(Math.abs(cvd.values[t] - e) <= 1e-9 * Math.max(1, Math.abs(e)));
+    });
+    tc.check(badC.length === 0, `${name}: "${cvd.title}" soma o incremento das linhas (0 sem negócios; nada com volume em falta) e reinicia nas âncoras`,
+      `${badC.length} barras divergentes${badC.length ? ` (1.ª @${badC[0]})` : ''}`);
+    // sem negócios e sem movimento: as duas linhas ficam onde estavam (fluxo 0, σ congelado; preço plano)
+    const flat = noTrade.filter((t) => t >= from && !aSet.has(t) && isF(fl.values[t - 1]) && data.bars[t].close === data.bars[t - 1].close);
+    const moved = flat.filter((t) => Math.abs(fl.values[t] - fl.values[t - 1]) > 1e-9 || Math.abs(pl.values[t] - pl.values[t - 1]) > 1e-9);
+    tc.check(flat.length > 0 && moved.length === 0, `${name}: barra sem negócios e sem movimento → linhas iguais às da barra anterior`, `${moved.length}/${flat.length} barras com variação`);
+  } else tc.warn(`${name}: plots das linhas, CVD ancorado ou σ não encontrados`);
+  // (6) contadores de frequência empírica de Z (dica da tabela) = recontagem
+  checkZFreq(tc, target, run, P, name);
+  return true;
+}
+
+/** Verificações só da execução principal (fonte intrabar com qualidade alta e pivots ligados). */
+function t12MainChecks(tc, target, run, data, R, name) {
+  const { P, eng } = R;
+  const n = data.bars.length, mk = data.marks;
+  const g = (role) => optRole(target, run, role);
+  const dl = g('delta'), tr = g('tier'), Z = g('z');
+  if (!dl || !tr || !Z) return;
+  // volume do gráfico em falta, intrabars com volume: o delta é o dos intrabars (não é anulado pelo volume do gráfico)
+  const badNa = mk.naChart.filter((t) => !(tr.values[t] === 3 && sameNum(dl.values[t], stubDelta(data.bars[t].code, NaN), 1e-9, 1e-9)));
+  const zNa = mk.naChart.filter((t) => isF(Z.values[t - 1]) && !isF(Z.values[t]));
+  tc.check(mk.naChart.length > 0 && badNa.length === 0 && zNa.length === 0, `${name}: volume do gráfico em falta com intrabars com volume → delta dos intrabars (${STUB_NA_VOL}·q), qualidade 3 e Z (é uma observação)`,
+    `${badNa.length} deltas/tiers divergentes, ${zNa.length} sem Z (${mk.naChart.map((t) => `@${t}: Δ ${fmt(dl.values[t], 2)}`).join(', ')})`);
+  // barras sem observação com salto de preço: nenhum «preço sem fluxo» nem evento nas ke barras seguintes
+  const ke = P.ke;
+  const near = (x) => mk.moves.some((m) => x >= m && x <= m + ke);
+  const evLabs = run.labels.filter((l) => /absorvid|sem fluxo|travad/i.test(labelText(l)));
+  const pwfNear = evLabs.filter((l) => /sem fluxo/i.test(labelText(l)) && near(labelBar(l))).map((l) => labelBar(l));
+  const pwfAl = run.alerts.filter((a) => a.type === 'alertcondition' && /^Preço sem fluxo/.test(a.title || '') && near(a.bar_index)).map((a) => a.bar_index);
+  tc.check(pwfNear.length === 0 && pwfAl.length === 0, `${name}: barras sem observação com salto de preço (${mk.moves.length}) não criam «preço sem fluxo» (etiqueta ou alerta) nas ${ke} barras seguintes`,
+    `${pwfNear.length} etiquetas (${pwfNear.slice(0, 4).join(',') || '—'}), ${pwfAl.length} alertas`);
+  // nenhuma etiqueta de evento nem alerta de Z/evento (não resolução, não pivot) numa barra sem observação
+  const noObsSet = new Set(idxWhere(n, (t) => eng.noObs[t]));
+  const labAt = evLabs.filter((l) => noObsSet.has(labelBar(l))).map((l) => labelBar(l));
+  const alAt = run.alerts.filter((a) => a.type === 'alertcondition' && noObsSet.has(a.bar_index) && !isResolutionTitle(a.title) && !/pivots/.test(a.title || '')).map((a) => `${a.bar_index}:${a.title}`);
+  tc.check(labAt.length === 0 && alAt.length === 0, `${name}: sem etiquetas de eventos nem alertas de Z/eventos nas barras sem observação`, `${labAt.length} etiquetas, ${alAt.length} alertas ${alAt.slice(0, 3).join(' | ')}`);
+  // auditoria exacta dos eventos e alertas (com pivots: regime de qualidade em observações, lqBar)
+  const au = auditEvents(tc, target, run, data, P, `${name} — auditoria`, { piv: target.hasInput('pivIn'), noObs: eng.noObs });
+  if (au && au.piv && au.piv.spans) {
+    const across = au.piv.spans.filter((s) => s.noObs > 0);
+    const byCount = au.piv.spans.filter((s) => !s.obsCountRule), byAll = au.piv.spans.filter((s) => !s.lqAllRule);
+    // (o pivot pode cair na barra seguinte à prevista: a sombra da barra de inversão pode igualar a do topo/fundo)
+    const built = mk.pivPairs.filter((pp) => au.piv.spans.some((s2) => s2.i - P.piv.R - pp.p2 >= 0 && s2.i - P.piv.R - pp.p2 <= 1 && s2.last - pp.p1 >= 0 && s2.last - pp.p1 <= 1));
+    tc.check(across.length > 0 && byCount.length > 0 && byAll.length > 0 && built.length === mk.pivPairs.length,
+      `${name}: divergências por pivots separadas por barras sem negócios contam (as ${mk.pivPairs.length} construídas a seguir a uma barra de qualidade baixa incluídas; ` +
+      `uma regra «observações seguidas > barras desde o pivot anterior» ou um lqBar que avançasse nas barras sem observação rejeitá-las-ia)`,
+      `${across.length}/${au.piv.spans.length} divergências com barras sem observação entre os pivots, ${byCount.length} rejeitadas pela contagem em observações (@${byCount.map((s) => s.i).slice(0, 5).join(',')}), ` +
+      `${byAll.length} por um lqBar que também avançasse nas barras sem observação; construídas presentes ${built.length}/${mk.pivPairs.length}; ${au.piv.nBlocked} bloqueadas por barras observadas de qualidade baixa`);
+  }
+  // o contador «com o gate aberto» é exercitado: há barras contadas (calibração ≥ 2N) com |Z| ≥ limiar e o gate fechado
+  // (preço desligado do fluxo)
+  const gate = g('gate');
+  if (gate) {
+    const { cal } = zFreqRecount(Z.values, gate.values, P);
+    const zClosed = idxWhere(n, (t) => cal[t] && Math.abs(Z.values[t]) >= P.thr && gate.values[t] !== 1);
+    tc.check(zClosed.length > 0, `${name}: há barras com |Z| ≥ ${P.thr} e o gate fechado (a frequência «com o gate aberto» difere da total)`, `${zClosed.length} barras`);
+  }
+  // as barras observadas de qualidade baixa partem a sequência (controlo: Z volta só depois de hqNeed observações)
+  const back = mk.lowQ.map((b) => range(b + 1, n).find((t) => isF(Z.values[t])));
+  tc.check(back.every((t, k) => t !== undefined && t > mk.lowQ[k] + 1), `${name}: controlo — barra observada sem intrabars (qualidade baixa) parte a sequência`,
+    mk.lowQ.map((b, k) => `@${b} → Z de volta em ${back[k] ?? '—'}`).join(', '));
+}
+
+/**
+ * Fallback «Nenhum»: as barras de volume 0 sem intrabars (zeroBar) não têm fonte (tier 0) e o volume do GRÁFICO decide:
+ * são barras sem negócios (delta 0, qualidade da barra anterior, linha contínua, Z logo na barra seguinte), não barras sem
+ * dados que partissem a sequência de qualidade (com intrabars de 1S/1T uma barra sem negócios não tem intrabars).
+ */
+function t12ZeroBarChecks(tc, target, run, data, name) {
+  const mk = data.marks;
+  const dl = optRole(target, run, 'delta'), tr = optRole(target, run, 'tier'), Z = optRole(target, run, 'z'), fl = optRole(target, run, 'fLine');
+  if (!dl || !tr || !Z || !fl) { tc.fail(`${name}: plots delta/qualidade/Z/linha do fluxo`); return; }
+  const bad = mk.zeroBar.filter((t) => !(dl.values[t] === 0 && tr.values[t] === tr.values[t - 1] && tr.values[t] >= 2 && isF(fl.values[t])));
+  tc.check(mk.zeroBar.length > 0 && bad.length === 0, `${name}: barra de volume 0 sem intrabars (sem fonte) → sem negócios: delta 0, qualidade da barra anterior, linha do fluxo contínua`,
+    mk.zeroBar.map((t) => `@${t}: Δ ${fmt(dl.values[t], 2)}, qualidade ${tr.values[t - 1]}→${tr.values[t]}, linha ${isF(fl.values[t]) ? 'contínua' : 'na'}`).join('; '));
+  const withZ = mk.zeroBar.filter((t) => isF(Z.values[t - 1]));
+  const lost = withZ.filter((t) => !isF(Z.values[t + 1]));
+  tc.check(withZ.length > 0 && lost.length === 0, `${name}: depois dessa barra o Z continua na barra seguinte (a sequência de qualidade não é partida)`,
+    `${withZ.length - lost.length}/${withZ.length}${lost.length ? `; sem Z depois de @${lost.join(',')}` : ''}`);
+}
+
+/** T12: integridade do volume (barras sem observação de fluxo), com a verificação de que o mutante da regra antiga falha. */
+export async function t12VolumeIntegrity(tc, target) {
+  if (!T12_RE.test(target.source)) { tc.skip('o alvo não tem a regra das barras sem observação de fluxo (noObs)'); return; }
+  const data = volIntegrityData();
+  tc.note(`dados: ${data.desc}`);
+  const P = params(target);
+  const proms = t12Start(target);
+  const R = t12Ref(target, data);
+  // (a) execução principal: intrabars 1S (qualidade alta), pivots ligados
+  const main = await proms.main;
+  t12StatChecks(tc, target, main, data, R, 'intrabar 1S');
+  t12MainChecks(tc, target, main, data, R, 'intrabar 1S');
+  // (b) "Só barras do gráfico": volume da fonte = volume do gráfico
+  const bar = await proms.bar;
+  {
+    const Rb = t12Ref(target, data, { barOnly: true });
+    const dl = optRole(target, bar, 'delta'), tr = optRole(target, bar, 'tier'), fl = optRole(target, bar, 'fLine'), srR = optRole(target, bar, 'sr'), sdR = optRole(target, bar, 'sd');
+    const n = data.bars.length;
+    if (dl && tr) {
+      const badD = idxWhere(n, (t) => !sameNum(dl.values[t], Rb.eng.delta[t], 1e-6, 1e-6)), badT = idxWhere(n, (t) => tr.values[t] !== 1);
+      tc.check(badD.length === 0 && badT.length === 0, '"Só barras do gráfico": delta = BVC com o volume do gráfico (na com volume em falta, 0 sem negócios); qualidade 1',
+        `${badD.length} deltas e ${badT.length} tiers divergentes${badD.length ? ` (1.º @${badD[0]})` : ''}`);
+    }
+    if (fl && srR && sdR) {
+      const from = P.N + 5;
+      const anchors = expectedAnchors(data, Rb.eng.tier, srR.values, sdR.values, P.N, utcDayKey, Rb.eng.noObs).filter((a) => a >= from);
+      const want = [...new Set([...anchors, ...idxWhere(n, (t) => t >= from && Rb.eng.volMiss[t])])];
+      const naF = range(from, n).filter((t) => !isF(fl.values[t]));
+      tc.check(sameSet(naF, want), '"Só barras do gráfico": linha do fluxo interrompida nas âncoras e no volume em falta (inclui o gráfico na com intrabars), contínua sem negócios',
+        `esperadas ${want.length}, interrupções ${naF.length}; só esperadas: ${setMinus(want, naF).slice(0, 4).join(',') || '—'}; só interrupções: ${setMinus(naF, want).slice(0, 4).join(',') || '—'}`);
+    }
+  }
+  // (c) estado na tabela quando a última barra não tem observação
+  for (const [key, re, lab] of [['stMiss', /Sem volume nesta barra \(dados em falta\)/, 'volume em falta'], ['stZero', /Sem negócios nesta barra/, 'sem negócios']]) {
+    const txt = tableText(await proms[key]);
+    tc.check(re.test(txt) && /fica fora de σ, ρ, Z e dos eventos/.test(txt), `estado na tabela com a última barra ${lab}: ${re.source.replace(/\\/g, '')} (dica: fora de σ, ρ, Z e eventos)`,
+      txt.split('\n').slice(0, 4).join(' | ').slice(0, 240));
+  }
+  // (d) edição Footprint: volume do FOOTPRINT (não o do gráfico) decide
+  let fpCtx = null;
+  if (proms.fp) {
+    const { fpBar } = volIntegrityFootprint(data);
+    fpCtx = { fpBar, R: t12Ref(target, data, { fpBar }) };
+    const fp = await proms.fp;
+    t12StatChecks(tc, target, fp, data, fpCtx.R, 'footprint');
+    const dl = optRole(target, fp, 'delta'), tr = optRole(target, fp, 'tier');
+    const over = data.marks.zeroLtf.filter((t) => fpBar[t] && fpBar[t].vol > 0).concat(data.marks.naChart);
+    const bad = over.filter((t) => !(tr.values[t] === 3 && sameNum(dl.values[t], fpBar[t].delta, 1e-9, 1e-9)));
+    tc.check(over.length > 0 && bad.length === 0, 'footprint: volume do gráfico 0 ou em falta com footprint com volume → delta do footprint e qualidade 3 (o volume do gráfico não decide)',
+      `${bad.length}/${over.length} barras divergentes`);
+  }
+  // (e) fallback «Nenhum»: barra de volume 0 sem intrabars → sem negócios (o volume do gráfico decide quando não há fonte);
+  // barras com volume em falta e sem intrabars → sem dados (tier 0, partem a sequência). Mutante: a regra exige uma fonte.
+  if (proms.fbNone) {
+    const fb = await proms.fbNone;
+    t12StatChecks(tc, target, fb, data, t12Ref(target, data, { fallback: 'none' }), 'fallback «Nenhum»');
+    t12ZeroBarChecks(tc, target, fb, data, 'fallback «Nenhum»');
+    if (proms.fbNoneMutF1) {
+      const recF = new TestCase('T12f', 'mutante');
+      t12ZeroBarChecks(recF, t12MutantF1(target), await proms.fbNoneMutF1, data, 'mutante');
+      const failedF = recF.checks.filter((c) => c.status === STATUS.FAIL);
+      tc.check(failedF.length > 0, 'mutação: com a regra «sem negócios só com fonte» (tier > 0), a barra de volume 0 sem intrabars do fallback «Nenhum» fica sem dados e o T12 falha',
+        `${failedF.length}/${recF.checks.length} verificações falham no mutante`);
+    }
+  }
+  // (f) aglomerados de eventos em observações: sequências de barras sem negócios (> ke) dentro das absorções não partem o
+  // aglomerado (auditoria exacta com o período refractário em observações; uma regra em barras abria aí eventos novos)
+  {
+    const gd = clusterGapData();
+    const au = auditEvents(tc, target, await proms.gap, gd, P, 'absorções com barras sem negócios — auditoria', { noObs: stubDeltaTier(gd).noObs });
+    if (au) tc.check(au.nMerged > 0, `aglomerados em observações: há barras de eventos que continuam o aglomerado através de sequências de ${gd.marks.gap} barras sem negócios (> ke = ${P.ke}); uma regra em barras abria aí eventos novos`,
+      `${au.nMerged} barras; ${gd.marks.gaps.length} sequências; ${au.absBars.length} etiquetas de absorção`);
+  }
+  // (g) mutação: com a regra antiga (nz(volume); volume 0 do gráfico → delta 0 e a barra continua a ser observação) o T12 falha
+  const mut = t12Mutant(target);
+  if (!mut) { tc.check(false, 'mutante da regra antiga nz(volume) construído (padrões do código encontrados)', 'actualizar OLD_VOLUME_RULES em tests/lib/tests_runtime.mjs', 'warn'); return; }
+  const mp = t12Start(mut, { mutant: true });
+  const rec = new TestCase('T12m', 'mutante');
+  const mMain = await mp.main;
+  t12StatChecks(rec, mut, mMain, data, R, 'mutante · intrabar 1S');
+  t12MainChecks(rec, mut, mMain, data, R, 'mutante · intrabar 1S');
+  if (mp.fp && fpCtx) t12StatChecks(rec, mut, await mp.fp, data, fpCtx.R, 'mutante · footprint');
+  const failed = rec.checks.filter((c) => c.status === STATUS.FAIL);
+  tc.check(failed.length > 0, 'mutação: com a regra antiga (nz(volume); volume 0 do GRÁFICO → delta 0 e tier anterior, a barra continua a ser observação) o T12 falha',
+    `${failed.length}/${rec.checks.length} verificações falham no mutante`);
+  tc.note(`mutante (regra antiga nz(volume)) — verificações que falham: ${failed.map((c) => c.label.replace(/^mutante · /, '').replace(/ \(.*$/, '').slice(0, 90)).join(' · ')}`);
+}
+
 // ───────────────────────────── pré-carregamento ─────────────────────────────
 /**
  * Lança já (sem esperar) todas as execuções planeadas dos testes pedidos, para que corram em paralelo nos
@@ -1222,4 +1684,5 @@ export function prefetch(target, ids, { quick = false, nBars = 3000, footprintEd
   if (has('T9')) go(() => { for (const w of Object.values(t9Wanted(target))) target.run(engineData(1500), w); });
   if (has('T10')) go(() => { for (const r of t10Runs(target)) target.run(r.data, r.wanted, r.opts); });
   if (has('T11') && target.info.edition !== 'standin') go(() => { for (const c of t11Cases(target)) target.run(c.data, c.wanted, { timeframe: c.tf }).catch(() => {}); });
+  if (has('T12') && T12_RE.test(target.source)) go(() => { t12Start(target); const m = t12Mutant(target); if (m) t12Start(m, { mutant: true }); });
 }
