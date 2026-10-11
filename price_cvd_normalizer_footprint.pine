@@ -574,7 +574,7 @@ bool  gapBar   = na(c1) or session.isfirstbar or math.abs(1e4 * math.log(open / 
 float rBar     = gapBar ? 1e4 * math.log(close / open) : rRaw
 float sBar     = ta.stdev(rBar, 100)
 float zBar     = sBar[1] > 0 and not na(rBar) ? clip(rBar / sBar[1], 10.0) : 0.0
-float barDelta = nz(volume) * (2.0 * normCdf(zBar) - 1.0)
+float barDelta = volume * (2.0 * normCdf(zBar) - 1.0)   // na quando o fornecedor não dá volume (≠ volume 0)
 
 // ── 6.4 Qualidade configurada (tier): 3 alta · 2 média · 1 baixa · 0 sem dados ──
 bool ltfTick = str.endswith(ltf, "T")
@@ -610,12 +610,12 @@ float vol0   = nz(volume)
 bool  useFp  = isFpSel and not na(fpDelta)
 bool  useLtf = not useFp and srcIn != DeltaSrc.bar and nIntra > 0 and (srcIn == DeltaSrc.ltf or fpFillOn)
 float delta  = na
-float barVol = na
+float barVol = na                                    // volume da FONTE escolhida (na = em falta, não 0)
 int   tier   = 0
 int   tierP  = nz(tier[1])
 if srcIn == DeltaSrc.bar
     delta  := barDelta
-    barVol := vol0
+    barVol := volume
     tier   := 1
 else if useFp
     delta  := fpDelta
@@ -627,17 +627,28 @@ else if useLtf
     tier   := cfgTier
 else if fallbackIn == Fallback.bvc
     delta  := barDelta
-    barVol := vol0
+    barVol := volume
     tier   := 1
-if vol0 == 0                                         // barra sem volume: delta 0, mantém o tier (não parte as séries)
-    delta  := 0.0
-    barVol := 0.0
-    tier   := tierP
+// Barra sem observação de fluxo, avaliada no volume da fonte escolhida (não no do gráfico): volume em falta (na: o
+// fornecedor não o deu) ou nulo (sem negócios). Não é uma observação (r, Δ = 0): se entrasse em σ, ρ, Z e eventos
+// seria um falso «preço sem fluxo». Fica fora das estatísticas, não conta nem parte a sequência de qualidade e mantém
+// o tier anterior (sem marcas de transição). Linhas: fluxo nulo sem negócios; interrompidas com volume em falta.
+bool volMiss = tier > 0 and na(barVol)
+bool noTrade = tier > 0 and not na(barVol) and barVol == 0
+bool noObs   = volMiss or noTrade
+if noObs
+    delta := volMiss ? na : 0.0
+    tier  := tierP
 
-// Barras consecutivas com qualidade ≥ média (as janelas estatísticas têm de caber inteiras nesse regime).
+// Observações consecutivas com qualidade ≥ média (as janelas estatísticas, em observações válidas, têm de caber
+// inteiras nesse regime). lqBar: última barra observada com qualidade < média (para os pivots, em barras).
 var int hqRun = 0
-hqRun := tier >= 2 ? hqRun + 1 : 0
-// A janela de σ/ρ desfasados (barras t−N..t−1) está toda em qualidade ≥ média.
+var int lqBar = -1
+if not noObs
+    hqRun := tier >= 2 ? hqRun + 1 : 0
+    if tier < 2
+        lqBar := bar_index
+// A janela de σ/ρ desfasados (as N observações anteriores) está toda em qualidade ≥ média.
 bool winFine = nz(hqRun[1]) >= nIn
 
 // Cobertura (para a tabela).
@@ -659,7 +670,7 @@ if useLtf
 var float hqDeltaSum = 0.0
 var float hqVolSum   = 0.0
 var int   hqBars     = 0
-if tier >= 2 and not na(delta)
+if tier >= 2 and not noObs and not na(delta)
     hqDeltaSum += delta
     hqVolSum   += nz(barVol)
     hqBars     += 1
@@ -671,10 +682,13 @@ bool  narWarn = not driftIn and hqBars >= math.max(mIn, math.ceil(5 * 86400 / tf
 // 7. INCREMENTOS E ESTATÍSTICA (σ, ρ, Z, gate, pernas)
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════
 // Todos os ta.*, math.sum e referências [] são calculados aqui, em todas as barras, e só depois combinados.
-float dSma  = ta.sma(delta, nIn)
-// Remoção opcional da deriva do fluxo (média de N barras desfasada uma barra).
-float d     = na(rBar) ? na : driftIn ? delta - dSma[1] : delta
+float deltaObs = noObs ? na : delta                 // só barras com fluxo observado
+float dSma  = ta.sma(deltaObs, nIn)
+// Remoção opcional da deriva do fluxo (média de N observações desfasada uma barra).
+float d     = na(rBar) ? na : driftIn ? deltaObs - dSma[1] : deltaObs
 float r     = na(d) ? na : rBar                      // pernas alinhadas: as mesmas barras em σ, ρ e somas
+// Incremento do fluxo para as LINHAS: 0 nas barras sem negócios (linhas contínuas); na com volume em falta.
+float dDisp = noTrade and not na(rBar) ? 0.0 : d
 
 float sr    = ta.stdev(r, nIn)
 float sd    = ta.stdev(d, nIn)
@@ -697,7 +711,7 @@ int   life    = math.max(1, math.round(lifeIn * 60.0 / tfSec))      // vida máx
 // Z só quando as janelas σ/ρ de TODOS os termos das somas (K e ke) cabem inteiras em barras de qualidade ≥ média:
 // o termo mais antigo da soma K usa σ de [t−K+1−N, t−K]; com a deriva removida, a SMA_N recua mais N barras.
 int   hqNeed  = nIn + math.max(kIn, ke) + (driftIn ? nIn : 0)
-bool  hqOk    = tier >= 2 and hqRun >= hqNeed
+bool  hqOk    = tier >= 2 and not noObs and hqRun >= hqNeed   // barra sem observação: sem D (não repete o anterior)
 
 float sumDiffK = math.sum(ur - ud, kIn)              // global, em todas as barras (só depois condicionado ao hqOk)
 float dStat    = hqOk ? sumDiffK / math.sqrt(2.0 * kIn * (1.0 - math.min(nz(rhoP), 0.95))) : na   // D_t (C1 simétrico)
@@ -719,6 +733,18 @@ float pLeg    = math.sum(ur, kIn) / math.sqrt(kIn)
 float fLeg    = math.sum(ud, kIn) / math.sqrt(kIn)
 float lamOlsP = sdP > 0 and srP > 0 ? nz(rhoP) * srP / sdP : na    // bps por unidade de delta
 float lamSigP = sdP > 0 and srP > 0 ? srP / sdP : na
+
+// Frequência empírica dos extremos de Z NESTE símbolo e timeframe (barras fechadas). O Z é um score empírico de
+// divergência (soma K sobreposta, autocorrelada, caudas pesadas), não uma normal padrão: |Z| ≥ 2 não equivale a 4.6%.
+var int zN   = 0                                     // barras com Z definido
+var int zN1  = 0                                     // |Z| ≥ limiar
+var int zN2  = 0                                     // |Z| ≥ limiar forte
+var int zNG  = 0                                     // |Z| ≥ limiar com o gate aberto (os casos que podem alertar)
+if barstate.isconfirmed and not na(zDiv)
+    zN  += 1
+    zN1 += math.abs(zDiv) >= thrIn ? 1 : 0
+    zN2 += math.abs(zDiv) >= thr2In ? 1 : 0
+    zNG += gateOn and math.abs(zDiv) >= thrIn ? 1 : 0
 
 // Fonte efectiva desta barra (tabela e alertas).
 string srcTxt = srcIn == DeltaSrc.bar ? "barras do gráfico (BVC)" :
@@ -745,6 +771,9 @@ if srcIn == DeltaSrc.bar
     stateTip := "Fonte «Só barras do gráfico»: o delta é estimado a partir do próprio preço (BVC na barra)."
 else if tier == 0
     stateTxt := "Sem dados de delta nesta barra"
+else if noObs
+    stateTxt := volMiss ? "Sem volume nesta barra (dados em falta)" : "Sem negócios nesta barra"
+    stateTip := "Barra sem observação de fluxo: fica fora de σ, ρ, Z e dos eventos (não é um «preço sem fluxo»)."
 else if tier == 1 and tickLike and (useLtf or useFp)
     stateTxt := "Sem sinais: volume de ticks (sem lado agressor)"
     stateTip := "Volume de ticks (declarado pelo fornecedor, ou FX à vista): conta negócios ou actualizações de " +
@@ -792,8 +821,8 @@ if divState
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════
 // CVD contínuo (desde a primeira barra com delta válido): só para os modos em janela e para os pivots.
 var float cvdC = na
-if not na(d)
-    cvdC := nz(cvdC) + d
+if not na(dDisp)
+    cvdC := nz(cvdC) + dDisp
 
 // Âncora: Auto = 1D (≤ 1h), 1W (< 1D), 1M (< 1W), 12M; manual só se for maior do que o gráfico.
 string autoTf   = tfSec <= 3600 ? "1D" : tfSec < 86400 ? "1W" : tfSec < 604800 ? "1M" : "12M"
@@ -825,7 +854,7 @@ bool   anchored = modeIn == Mode.sig or modeIn == Mode.imp
 string anchBase = useRth ? "sessão regular (RTH)" : useSess ? "sessão " + sessIn : anchorName(anchTf)
 
 var float lnA      = na
-var float cvdA     = 0.0                             // CVD ancorado (de d)
+var float cvdA     = 0.0                             // CVD ancorado (de dDisp)
 var float cvdRawA  = 0.0                             // delta bruto acumulado (para o NAR)
 var float volA     = 0.0
 var float srA      = na                              // σ e ρ congelados na âncora
@@ -835,7 +864,7 @@ var int   anchorId = 0
 var int   anchorBar = na
 var bool  anchFine = false                           // σ/ρ congelados estimados só com barras de qualidade ≥ média
 var bool  anchSeam = false                           // âncora actual criada na entrada em dados finos
-bool firstInit = na(lnA) and not na(d)               // primeira barra em que as pernas podem nascer
+bool firstInit = na(lnA) and not na(dDisp)             // primeira barra em que as pernas podem nascer
 bool calAnch   = useRth ? session.isfirstbar_regular : useSess ? sessFirst : tfChg
 // Costura de cobertura: se a escala congelada veio de uma janela com barras de qualidade baixa (delta derivado do preço,
 // outra escala e ρ inflacionado), as linhas reiniciam na 1.ª barra cuja janela σ/ρ está toda em dados finos.
@@ -861,7 +890,7 @@ else
         anchFine := winFine
     if na(rhoA)
         rhoA := rhoP
-cvdA    += nz(d)
+cvdA    += nz(dDisp)
 cvdRawA += nz(delta)
 volA    += na(delta) ? 0.0 : nz(barVol)
 float nar = volA > 0 ? cvdRawA / volA : na           // rácio de agressão líquida desde a âncora ∈ [−1, 1]
@@ -911,8 +940,8 @@ float fSel = switch modeIn
 // Sem delta nesta barra → ambas as pernas na. Na barra de reinício da âncora as linhas ancoradas interrompem-se
 // (plot.style_linebr): o valor ≈ 0 de uma barra não acrescenta nada e evita uma ligação vertical enganadora.
 bool  resetBar = newAnchor and anchored
-float pLine = na(d) or (resetBar and modeIn == Mode.sig) ? na : pSel
-float fLine = na(d) or resetBar ? na : fSel
+float pLine = na(dDisp) or (resetBar and modeIn == Mode.sig) ? na : pSel
+float fLine = na(dDisp) or resetBar ? na : fSel
 
 // Cone nulo iid (±2σ) em torno da linha do preço, só em unidades-σ ancoradas.
 int   nSince = na(anchorBar) ? 0 : bar_index - anchorBar + 1
@@ -1147,7 +1176,7 @@ if barstate.isconfirmed and not na(ph)
     int pb = bar_index - pivRIn
     if pivIn and not na(lastPhBar) and not na(cvdAtPiv) and not na(lastPhCvd) and sdP > 0
         int  gap    = pb - lastPhBar
-        bool hqSpan = hqRun > bar_index - lastPhBar       // os dois pivots dentro do mesmo regime de qualidade ≥ média
+        bool hqSpan = lqBar < lastPhBar                   // os dois pivots dentro do mesmo regime de qualidade ≥ média
         if gap >= pivMinIn and gap <= pivMaxIn and hqSpan and ph > lastPh and cvdAtPiv <= lastPhCvd - pivMagIn * sdP
             pivTop := true
             // Estado não resolvido: estilo neutro e oco (só os estados resolvidos levam cor direccional).
@@ -1165,7 +1194,7 @@ if barstate.isconfirmed and not na(pl)
     int pb = bar_index - pivRIn
     if pivIn and not na(lastPlBar) and not na(cvdAtPiv) and not na(lastPlCvd) and sdP > 0
         int  gap    = pb - lastPlBar
-        bool hqSpan = hqRun > bar_index - lastPlBar
+        bool hqSpan = lqBar < lastPlBar
         if gap >= pivMinIn and gap <= pivMaxIn and hqSpan and pl < lastPl and cvdAtPiv >= lastPlCvd + pivMagIn * sdP
             pivBot := true
             label.new(pb, pl, "Fundo sem confirmação do fluxo", xloc = xloc.bar_index, yloc = yloc.price, color = evBg(neutIn, true),
@@ -1376,13 +1405,18 @@ if tblIn and barstate.islast
     string zLine1  = (tblFull ? "" : "Z ") + fs2(zDiv) + calLbl + (barstate.isconfirmed ? "" : " · barra em curso")
     string zAlTip  = nCalD < 2 * nIn and not na(zDiv) ? "\nAlertas de Z só com ≥ " + str.tostring(2 * nIn) + " valores de " +
          "calibração (agora " + str.tostring(nCalD) + ")." : ""
+    // Calibração observada neste gráfico (referência normal: |Z| ≥ 2 → 4.6%, ≥ 3 → 0.27%).
+    string zFreqTip = zN == 0 ? "" : "\nFrequência empírica neste gráfico (" + str.tostring(zN) + " barras com Z): |Z| ≥ " +
+         str.tostring(thrIn, "0.0") + " em " + str.tostring(100.0 * zN1 / zN, "0.0") + "%, ≥ " + str.tostring(thr2In, "0.0") +
+         " em " + str.tostring(100.0 * zN2 / zN, "0.00") + "%; com o gate aberto, " + str.tostring(100.0 * zNG / zN, "0.0") +
+         "%. O Z é um score empírico (uma normal daria 4.6% e 0.27% para 2 e 3)."
     if tblFull
         tbl.cell(0, rZ, "Z (K = " + str.tostring(kIn) + ") · estado", text_color = fg, text_size = tblSize, text_halign = text.align_left)
     tbl.cell(vc, rZ, zLine1 + "\n" + stateShort, text_color = gateOn and not na(zDiv) ? fg : mut, bgcolor = zCellBg,
          text_size = tblSize, text_halign = text.align_left, tooltip = (stateTip == "" ? "" : stateTip + "\n") +
          (barstate.isconfirmed ? "" : "Barra em curso: Z e estado provisórios até ao fecho; alertas e eventos só em barras fechadas.\n") +
          "Z (K = " + str.tostring(kIn) + ") · ρ(r, Δ) [IC 95%]: " + rhoTxt + "\n" + lamTxt + "\n" + noteTxt +
-         " Z > 0: preço à frente do fluxo; Z < 0: fluxo à frente do preço." + zAlTip)
+         " Z > 0: preço à frente do fluxo; Z < 0: fluxo à frente do preço." + zAlTip + zFreqTip)
     // Último evento: texto base + etiquetas (preço travado, confiança) na 1.ª linha; idade e resolução na 2.ª
     int    rEv    = tblFull ? 5 : 2
     int    evN    = na(lastEvBar) ? 0 : bar_index - lastEvBar
