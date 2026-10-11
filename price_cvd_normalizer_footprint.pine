@@ -1,0 +1,1544 @@
+//@version=6
+// GERADO por tools/build.py a partir de src/price_cvd_normalizer.src.pine — não editar à mão.
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+//  PREÇO × CVD NORMALIZADO [ORDER FLOW]
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+//  Põe o preço e o CVD (delta de volume acumulado) na mesma escala, no mesmo painel, de forma causal.
+//  A microestrutura liga VARIAÇÕES de preço a fluxo assinado (Kyle; Evans-Lyons; Cont-Kukanov-Stoikov),
+//  não níveis a níveis. Por isso as duas pernas medem-se em unidades do seu próprio σ de uma barra,
+//  estimado sobre incrementos e congelado na âncora: é o preço implícito pelo fluxo de Kyle com
+//  λσ = σr/σΔ, lido em unidades-σ. As divergências medem-se com uma estatística simétrica (Z),
+//  calibrada empiricamente e filtrada pela correlação dos incrementos (gate ρ). Os rótulos são neutros:
+//  a direcção é decidida pelo preço. Divergência ≠ previsão.
+//
+//  Fórmulas (σ e ρ sempre desfasados uma barra; por omissão N = 100, K = 20, M = 1000, c = 4):
+//    r_t   = 1e4·ln(C_t/C_{t−1}) [bps]; 1e4·ln(C_t/O_t) na 1.ª barra da sessão ou num gap > 3σ
+//    Δ_t   = delta da barra: intrabars (regra da vela da TradingView ou BVC) | BVC na barra
+//    σr, σΔ, ρ = stdev_N(r), stdev_N(Δ), corr_N(r, Δ)            (incrementos, nunca níveis)
+//    Linhas (unidades-σ ancoradas, a = barra da âncora):
+//      P̃_t = 1e4·(ln C_t − ln O_a)/σr,a          F̃_t = Σ_{i=a..t} Δ_i / σΔ,a
+//    Preço implícito pelo fluxo: P̂_t = O_a·exp(λ_a·CVD_t^(a)/1e4), λ_a = σr,a/σΔ,a (ou ρ_a·σr,a/σΔ,a)
+//    Divergência: u_r = clip(r/σr, ±c), u_d = clip(Δ/σΔ, ±c)
+//      D_t = Σ_K(u_r − u_d)/√(2K·(1 − min(ρ, 0.95)))       Z_t = D_t / RMS_M(D)_{t−1} (não centrado)
+//      Gate: ρ_{t−1} ≥ max(ρmin, tanh(1.96/√(N−3))) e qualidade dos dados ≥ média; Z só com as janelas
+//      σ/ρ de todos os termos da soma K inteiras em dados de qualidade ≥ média
+//    BVC-Normal: Δ = V·(2Φ(z) − 1), z = clip(ΔP/σ, ±10), Φ por Abramowitz–Stegun 7.1.26
+//
+//  Referências (forma curta): Kyle (1985) Econometrica 53; Evans & Lyons (2002) JPE 110;
+//  Cont, Kukanov & Stoikov (2014) JFEc 12; Chordia, Roll & Subrahmanyam (2002) JFE 65;
+//  Easley, López de Prado & O'Hara (2012) RFS 25; Lillo & Farmer (2004) SNDE 8;
+//  Bouchaud et al. (2004) QF 4; Weber & Rosenow (2005) QF 5; Ernst, Shepp & Wyner (2017) AoS 45;
+//  Abramowitz & Stegun (1964) eq. 7.1.26.
+//
+//  Edição Footprint: acrescenta a fonte "Footprint" (request.footprint, só contas Premium/Ultimate).
+//  Fonte única: src/price_cvd_normalizer.src.pine → tools/build.py gera as duas edições.
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// Desvio deliberado da spec §2: sem "precision" no indicator(). O "precision" do plot() é "input int" e não pode
+// seguir o syminfo.mintick, por isso as linhas têm dois pares de plots: unidades-σ/visuais com precision = 2 e
+// preço implícito sem precision (herda a do gráfico); cada par só se mostra no seu modo. Os plots σ/Z/ρ do Data
+// Window fixam a sua precisão individualmente.
+indicator("Preço × CVD Normalizado [Order Flow · Footprint]", shorttitle = "P×CVD FP", overlay = false, format = format.price,
+     explicit_plot_zorder = true, max_labels_count = 500, max_lines_count = 500)
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// 1. CONSTANTES
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+const string G_DATA  = "Dados de delta"
+const string G_NORM  = "Normalização e visualização"
+const string G_STAT  = "Estatística"
+const string G_EVT   = "Eventos"
+const string G_STYLE = "Estilo"
+const string G_TBL   = "Tabela"
+
+// Paleta de qualidade/avisos NÃO direccional (distinta de subida/descida e das cores de Z) e legível nos
+// temas claro e escuro (contraste WCAG ≥ 3.9:1 em #FFFFFF e em #131722).
+const color C_LEVEL  = #787B86     // níveis de referência (0, ±limiares)
+const color C_ANCHOR = #9598A1     // marca de âncora no fundo
+const color C_SEAM   = #8D6E63     // transição entre fontes de delta (intensidade pela nova qualidade)
+const color C_WARN   = #C0507E     // avisos na tabela (4.5:1 no claro, 4.0:1 no escuro)
+// Cor por omissão da linha do preço (= default do input pColIn): sentinela → chart.fg_color, porque o default de
+// um input.color tem de ser constante e o chart.fg_color não é.
+const color C_PRICE_DEF = #787B86
+
+const string NOTE_HTF = "Apenas contexto — evidência de seguimento só a ~15–60 min."
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// 2. TIPOS ENUMERADOS (opções dos menus)
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+enum DeltaSrc
+    ltf = "Intrabar (timeframe inferior)"
+    fp  = "Footprint (Premium/Ultimate)"
+    bar = "Só barras do gráfico (derivado do preço)"
+
+enum Precision
+    auto   = "Auto (paridade com o CVD da TradingView)"
+    t1     = "1T (ticks · Ultimate)"
+    s1     = "1S (segundos · Premium+)"
+    m1     = "1 minuto"
+    custom = "Personalizado"
+
+enum Classifier
+    candle = "Regra da vela (paridade TradingView)"
+    bvc    = "BVC-Normal por intrabar"
+
+enum Fallback
+    bvc  = "BVC na barra (derivado do preço)"
+    none = "Nenhum (sem dados)"
+
+enum Mode
+    sig  = "Unidades-σ ancoradas"
+    imp  = "Preço implícito pelo fluxo (λ)"
+    roll = "Unidades-σ em janela móvel"
+    lz   = "Z-score de níveis (só visual)"
+    mm   = "Mín–máx (só visual)"
+
+enum Anchor
+    auto = "Auto"
+    rth  = "Sessão regular (RTH)"
+    sess = "Sessão personalizada"
+    d1   = "Diária"
+    w1   = "Semanal"
+    mo1  = "Mensal"
+
+enum Impact
+    vm  = "λσ = σr/σΔ (igualado à volatilidade)"
+    ols = "λ OLS = ρ·σr/σΔ"
+
+enum View
+    lines = "Linhas"
+    hist  = "Histograma Z"
+    both  = "Linhas + Z"
+
+enum Lean
+    neutral = "Neutro"
+    cont    = "Continuação"
+    rev     = "Reversão"
+
+enum TblPos
+    tr = "Canto superior direito"
+    tl = "Canto superior esquerdo"
+    mr = "Meio à direita"
+    ml = "Meio à esquerda"
+    br = "Canto inferior direito"
+    bl = "Canto inferior esquerdo"
+
+enum TblSize
+    tiny   = "Muito pequeno"
+    small  = "Pequeno"
+    normal = "Normal"
+
+enum TblMode
+    compact = "Compacta"
+    full    = "Completa"
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// 3. TOOLTIPS
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+const string TT_SRC     = "Origem do delta de cada barra. Intrabar: classifica cada barra do timeframe inferior " +
+     "(regra da vela da TradingView, ou BVC). Footprint: delta do footprint de volume da TradingView, classificado " +
+     "pela TradingView a partir da acção do preço intrabar (não das marcas de agressor da bolsa); só funciona em " +
+     "contas Premium/Ultimate (noutros planos o script pode parar com erro) e nunca é escolhido automaticamente. " +
+     "Só barras do gráfico: delta estimado a partir do próprio preço (BVC-Normal) — qualidade baixa; a divergência " +
+     "e os eventos ficam desligados."
+const string TT_PREC    = "Timeframe dos intrabars. Auto = paridade com o CVD da TradingView: 1S em gráficos de " +
+     "segundos, 1 min em intradiário, 5 min no diário, 60 min no semanal ou superior. Mais fino = mais preciso, mas " +
+     "cobre menos barras (limite de 100K a 200K intrabars, conforme o plano): com 100K, 1S cobre ~28 h de mercado " +
+     "líquido (~330 barras de 5 min, ~110 de 15 min), o que acima de 5 min não chega para o Z. 1T cobre ainda menos e " +
+     "só serve em gráficos de segundos ou de poucos minutos: uma barra com mais de 100 000 negócios excede o limite " +
+     "de 100 000 elementos de um array. 1S exige Premium ou superior e 1T exige Ultimate; se o plano não os " +
+     "suportar, o script pode dar erro ou ficar sem intrabars (a tabela mostra a fonte efectiva). Qualidade: 1T ou " +
+     "1S abaixo do timeframe do gráfico, com a regra da vela = alta; outros intrabars abaixo do gráfico (ou o BVC) = " +
+     "média; iguais ou superiores ao gráfico = baixa (sem sinais); com volume de ticks (FX à vista, CFD) sempre " +
+     "baixa (sem lado agressor: sem sinais). Num gráfico de 1 min o Auto usa intrabars iguais ao gráfico: escolha 1S " +
+     "ou 1T para ter sinais; num de 1 s, só 1T."
+const string TT_CUST    = "Usado só com a precisão «Personalizado». Tem de ser inferior ao timeframe do gráfico; " +
+     "se for igual, a qualidade é baixa (sem sinais); se for superior não há intrabars e aplica-se a regra das " +
+     "barras sem intrabars."
+const string TT_CLS     = "Regra da vela: +V se fecho > abertura, −V se fecho < abertura; se igual, compara com o " +
+     "fecho anterior; senão mantém o lado anterior (como o CVD da TradingView). Em 1T aplica primeiro a regra " +
+     "das cotações (bid/ask). BVC-Normal: V·(2Φ(ΔP/σ) − 1) por intrabar; em dados reais não superou a regra da vela " +
+     "(com 1S ficou ao nível de 1 min com a regra da vela), por isso com BVC a qualidade é no máximo média. Em " +
+     "acções, os leilões de abertura e de fecho (quando o fornecedor os inclui no volume intradiário) entram no delta " +
+     "com o sinal do intrabar em que caem, embora não sejam fluxo agressor: espere saltos do CVD na abertura e no fecho."
+const string TT_FALL    = "O que fazer nas barras sem intrabars (para lá do limite de intrabars do plano, falhas nos " +
+     "dados do fornecedor ou timeframe inferior inválido). BVC na barra: estimativa derivada do preço (qualidade " +
+     "baixa, sem sinais); nessas barras a linha do CVD fica esbatida. Nenhum: a barra fica sem dados e as linhas " +
+     "interrompem-se."
+const string TT_TICKS   = "Ticks por linha do footprint. Não altera o delta total da barra; aumente-o se o " +
+     "footprint vier vazio em barras muito amplas (mais de 2000 linhas)."
+const string TT_FPFILL  = "Ligado: as barras sem footprint usam o delta intrabar (mistura de classificadores). " +
+     "Desligado: essas barras seguem a regra das barras sem intrabars."
+const string TT_DRIFT   = "Subtrai ao delta a sua média móvel desfasada: Δ − SMA_N(Δ)[1]. Remove o desequilíbrio " +
+     "estrutural de agressores (deriva do CVD). Sugerido LIGADO em perpétuos de cripto e em qualquer símbolo (também " +
+     "spot) em que a tabela avise «desequilíbrio persistente» (NAR de todo o histórico de qualidade ≥ média com |NAR| " +
+     "≥ 3%, em pelo menos M barras e 5 dias de barras; o NAR desde a âncora varia demasiado de dia para dia para " +
+     "isso): sem a remoção, esse desequilíbrio desloca o Z para um dos lados e um dos limiares dispara muito mais " +
+     "vezes do que o outro. Em testes ajudou a " +
+     "calibração quando o preço só reage às inovações do fluxo, mas piorou a detecção quando o fluxo persistente " +
+     "move o preço. Ligado, a estatística exige mais N barras seguidas de qualidade ≥ média."
+const string TT_MODE    = "Unidades-σ ancoradas (recomendado): preço e fluxo em múltiplos do seu σ de uma barra " +
+     "desde a âncora — o mapeamento de Kyle com λσ = σr/σΔ. Em dias de fluxo persistente num só sentido a linha do " +
+     "CVD pode afastar-se muito da do preço (o σΔ fica congelado na âncora) e dominar a escala do painel. Preço " +
+     "implícito pelo fluxo: o CVD convertido em preço. Unidades-σ em janela móvel: sem reinícios. Z-score de níveis " +
+     "e Mín–máx: só visuais (a estatística de níveis é espúria; não geram sinais). Os sinais vêm sempre das " +
+     "estatísticas calibradas (Z, zF, zP), nunca das linhas."
+const string TT_ANCH    = "Auto: gráfico ≤ 1h → diária (CME: dia Globex; cripto: dia UTC); < 1D → semanal; 1D → " +
+     "mensal; ≥ 1W → anual. RTH: início da sessão regular segundo a TradingView — em futuros do CME pode ser o " +
+     "próprio dia Globex e em cripto/FX coincide com a diária; nesses casos use a sessão personalizada. Uma âncora " +
+     "manual tem de ser maior do que o timeframe do gráfico (RTH e sessão personalizada exigem gráfico " +
+     "intradiário); se não for, usa-se a Auto e a tabela avisa. Se o σ congelado na âncora tiver sido estimado com " +
+     "barras de qualidade baixa (antes do início da cobertura dos intrabars ou do footprint), as linhas reiniciam na " +
+     "primeira barra com N barras seguidas de qualidade ≥ média (a tabela indica-o). As estatísticas nunca reiniciam " +
+     "(só as linhas)."
+const string TT_SESS    = "Sessão cujo início ancora as linhas, na hora da bolsa (só conta o início; aceita sessões " +
+     "que atravessam a meia-noite, como 1700-1600). Por omissão 0830-1515: a sessão regular dos índices do CME, hora " +
+     "de Chicago."
+const string TT_W       = "Janela, em barras, dos modos em janela móvel, Z-score de níveis e Mín–máx."
+const string TT_LAM     = "λσ = σr/σΔ: mapeamento simétrico (por omissão). λ OLS = ρ·σr/σΔ: «preço esperado " +
+     "dado o fluxo»; encolhe a linha do fluxo pelo factor ρ."
+const string TT_OVL     = "Desenha também o preço implícito pelo fluxo no gráfico principal: referência visual do " +
+     "CVD em preço; não é preço justo nem alvo. Em dias de fluxo persistente num só sentido a linha pode ficar dezenas " +
+     "de % longe do preço (o λ fica congelado na âncora) e, como entra na escala automática do gráfico principal, " +
+     "comprimir as velas; nesse caso desligue-a ou use λ OLS, que a encolhe pelo factor ρ."
+const string TT_VIEW    = "Linhas: as duas pernas; o preenchimento entre elas codifica o Z calibrado das últimas K " +
+     "barras, enquanto a distância entre as linhas acumula desde a âncora — podem discordar. Histograma Z: só o Z " +
+     "da divergência. Linhas + Z: ambos, mas as linhas esmagam as colunas Z (±2 a ±4): em unidades-σ ancoradas " +
+     "chegam a ±15–30 ao fim do dia e no modo preço implícito estão na escala do preço."
+const string TT_CONE    = "Cone nulo iid (±2σ) para a linha do fluxo à volta da linha do preço, só em unidades-σ " +
+     "ancoradas: ±2·√(2n(1−ρ)), n = barras desde a âncora. É só uma referência iid, aproximadamente correcta nas " +
+     "primeiras ~20 barras: o fluxo tem memória longa e a volatilidade intradiária varia, e em dados reais de 5 min " +
+     "com âncora diária o desvio real foi 2 a 3 vezes maior (cerca de 17% de saídas em vez de 4.6%)."
+const string TT_BG      = "Fundo ténue nas barras de âncora (modos ancorados) e nas mudanças de qualidade dos " +
+     "dados (transições entre fontes de delta)."
+const string TT_N       = "Janela, em barras, de σr, σΔ e ρ. Calculados sobre incrementos e desfasados uma barra."
+const string TT_K       = "Número de barras somadas na estatística de divergência D."
+const string TT_M       = "Janela do RMS não centrado que calibra o Z (recomendado ≥ 5N). Não centrar mantém " +
+     "visíveis as divergências persistentes. Enquanto houver menos de M valores a calibração é provisória (a " +
+     "tabela mostra n/M) e o Z é menos fiável; com o histórico curto de 1S/1T o M raramente é atingido (com 1S num " +
+     "gráfico de 5 min, em dados reais, |Z| passou o limiar ~1.2–1.5 vezes mais do que com a calibração completa). " +
+     "Os alertas de Z só disparam com pelo menos 2N valores (o aquecimento de 2N do dossier). Com menos de 20·K " +
+     "valores (≈ 20 janelas independentes) as colunas e o preenchimento não passam da intensidade abaixo do limiar."
+const string TT_CLIP    = "As unidades-σ de cada barra são limitadas a ±c antes de somar (guarda contra a " +
+     "concavidade do impacto e as caudas pesadas)."
+const string TT_THR     = "|Z| ≥ limiar marca divergência (cerca de 6% das barras em dados reais, antes do gate). " +
+     "Os alertas de Z disparam no 1.º cruzamento e só voltam a armar depois de o Z regressar a menos de limiar − 1 " +
+     "(do mesmo lado). Com um desequilíbrio persistente de agressores (ver «Remover deriva do fluxo») um dos lados " +
+     "dispara mais vezes."
+const string TT_THR2    = "|Z| ≥ limiar forte (cerca de 1–1.5% das barras em dados reais). Intensidade máxima do " +
+     "preenchimento."
+const string TT_RHO     = "Gate efectivo = max(este valor, tanh(1.96/√(N−3))). Com ρ abaixo do gate o Z fica a " +
+     "cinzento e não há sinais; com dados de qualidade baixa o Z não é calculado."
+const string TT_EV      = "Fluxo forte (|zF| ≥ limiar) sem movimento do preço no mesmo sentido, numa janela curta. " +
+     "Inclui os eventos «preço travado» (fluxo extremo, preço quase parado), mesmo com o preço ligeiramente no " +
+     "sentido do fluxo — mas nunca quando o preço acompanhou o fluxo na proporção de ρ. Rótulo neutro: o preço " +
+     "resolve (continuação se fechar para lá do extremo do evento no sentido do fluxo; absorção segurou no " +
+     "sentido oposto). Evidência direccional fraca e não validada. Um novo evento começa quando o lado muda ou " +
+     "depois de mais de uma janela do evento sem absorção do mesmo lado. Rótulo oco = baixa confiança ou " +
+     "calibração provisória (indicado no rótulo)."
+const string TT_PWF     = "Movimento forte do preço (|zP| ≥ limiar) sem fluxo no mesmo sentido. Rótulo neutro. Na " +
+     "subida: recompra de vendas a descoberto com ordens limite, retirada de ofertas de venda ou notícia; na " +
+     "descida: retirada de ofertas de compra ou notícia (pode ser permanente). Sem evidência de reversão. Rótulo " +
+     "oco = baixa confiança ou calibração provisória."
+const string TT_EVWIN   = "Janela dos eventos, em minutos, convertida em barras: mínimo 1 barra (com os valores por " +
+     "omissão, em gráficos de 15 min ou mais é sempre 1 barra) e máximo M/20 barras, para o zF e o zP ficarem " +
+     "calibrados em ≥ 20 janelas — em gráficos de segundos a janela efectiva fica mais curta (o rótulo mostra-a)."
+const string TT_LIFE    = "Tempo máximo, em minutos, para a resolução de um evento de absorção (mínimo 1 barra). Com " +
+     "os valores por omissão, em gráficos de 1 h ou mais a vida é de 1 barra: o evento resolve ou expira na barra " +
+     "seguinte e serve apenas de contexto."
+const string TT_ZF      = "Limiar de |zF| para absorção e de |zP| para preço sem fluxo."
+const string TT_PIN     = "Fluxo extremo (|zF| ≥ este valor) com o preço quase parado: evento «preço travado». " +
+     "Exclui os casos em que o preço acompanhou o fluxo na proporção de ρ (s·zP ≥ |ρ|·|zF|). O zF tem caudas " +
+     "pesadas: em dados reais |zF| ≥ 3 ocorreu em ~2–3.5% das barras, por isso «travado» marca fluxo forte com o " +
+     "preço quase parado, não um extremo raro."
+const string TT_PINP    = "|zP| máximo para considerar o preço travado."
+const string TT_LOWC    = "Com intrabars em minutos abaixo do timeframe do gráfico (qualidade média), os eventos " +
+     "aparecem em estilo de baixa confiança (rótulo oco, «baixa conf.»). Em testes, o ligeiro efeito observado com o " +
+     "delta real dos agressores desapareceu com delta estimado de intrabars de 1 minuto. Enquanto a calibração do " +
+     "zF/zP for provisória (menos de 2N valores ou de 20 janelas independentes) os eventos também ficam ocos " +
+     "(«cal. prov.») e não geram alertas, nem os eventos nem a sua resolução."
+const string TT_LEAN    = "Só recolore eventos de qualidade alta (não ocos) ainda NÃO resolvidos. Neutro por omissão: " +
+     "não há evidência revista por pares de uma direcção típica após absorção; num teste interno (BTC numa só " +
+     "bolsa, com o delta real dos agressores, na própria amostra) houve ligeira continuação a 30 min após janelas de " +
+     "15 min, que desapareceu com delta estimado de intrabars de 1 minuto e nunca foi testada com 1S."
+const string TT_PIV     = "Divergência clássica: o CVD é lido na barra do pivot do preço (não exige pivot " +
+     "simultâneo no CVD). Só é conhecida R barras depois e exige dados de qualidade ≥ média entre os dois pivots. " +
+     "Evidência fraca: contexto, não previsão."
+const string TT_PIVL    = "Barras à esquerda do pivot."
+const string TT_PIVR    = "Barras à direita do pivot (atraso de confirmação)."
+const string TT_PIVMIN  = "Distância mínima, em barras, entre dois pivots comparados."
+const string TT_PIVMAX  = "Distância máxima, em barras, entre dois pivots comparados."
+const string TT_PIVMAG  = "Diferença mínima de CVD entre os pivots, em unidades do σΔ de UMA barra (não escala com a " +
+     "distância entre os pivots: com pivots afastados filtra pouco)."
+const string TT_COL     = "Cores das linhas: preço e CVD. Com o cinzento por omissão, a linha do preço usa a cor do " +
+     "texto do tema (branca no escuro, preta no claro), para se distinguir dos elementos neutros."
+const string TT_AHEAD   = "Preenchimento e colunas Z. Z > 0: nas últimas K barras o preço subiu mais (ou caiu menos) " +
+     "do que o fluxo implica — preço à frente do fluxo (não é um sinal de alta: inclui vendas sem queda do preço e " +
+     "subidas sem compras). Z < 0: fluxo à frente do preço."
+const string TT_RES     = "Cores das resoluções e dos eventos: subida, descida e neutro."
+const string TT_WIDTH   = "Espessura das linhas do preço e do CVD."
+const string TT_TBL     = "Tabela de estado: fonte e qualidade, Z e estado, último evento (e, na versão completa, " +
+     "cobertura, ρ, λ, NAR e tipo de volume)."
+const string TT_TBLMODE = "Compacta: uma coluna com 3 linhas (fonte, qualidade e avisos; Z e estado; último evento); " +
+     "a âncora, o NAR e os pormenores ficam nas dicas das células. Completa: 9 linhas — precisa de um painel mais alto."
+const string TT_TBLPOS  = "Posição da tabela no painel."
+const string TT_TBLSIZE = "Tamanho do texto da tabela."
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// 4. INPUTS
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// ── Dados de delta ──
+DeltaSrc   srcIn      = input.enum(DeltaSrc.ltf, "Fonte do delta", group = G_DATA, tooltip = TT_SRC, display = display.none)
+// Opções do footprint logo a seguir à fonte: o "active" dos inputs intrabar depende do preenchimento.
+int        ticksIn    = input.int(100, "Ticks por linha do footprint", minval = 1, group = G_DATA, tooltip = TT_TICKS,
+     active = srcIn == DeltaSrc.fp, display = display.none)
+bool       fpFillIn   = input.bool(false, "Preencher barras sem footprint com delta intrabar", group = G_DATA,
+     tooltip = TT_FPFILL, active = srcIn == DeltaSrc.fp, display = display.none)
+// Os inputs intrabar só ficam activos quando o delta pode vir dos intrabars.
+bool       ltfUsedIn  = srcIn == DeltaSrc.ltf or (srcIn == DeltaSrc.fp and fpFillIn)
+Precision  precIn     = input.enum(Precision.auto, "Precisão intrabar", group = G_DATA, tooltip = TT_PREC,
+     active = ltfUsedIn, display = display.none)
+string     ltfCustIn  = input.timeframe("1", "Timeframe personalizado", group = G_DATA, tooltip = TT_CUST,
+     active = ltfUsedIn and precIn == Precision.custom, display = display.none)
+Classifier clsIn      = input.enum(Classifier.candle, "Classificador intrabar", group = G_DATA, tooltip = TT_CLS,
+     active = ltfUsedIn, display = display.none)
+Fallback   fallbackIn = input.enum(Fallback.bvc, "Barras sem intrabars", group = G_DATA, tooltip = TT_FALL,
+     active = srcIn != DeltaSrc.bar, display = display.none)
+bool       driftIn    = input.bool(false, "Remover deriva do fluxo", group = G_DATA, tooltip = TT_DRIFT,
+     display = display.none)
+
+// ── Normalização e visualização ──
+Mode       modeIn     = input.enum(Mode.sig, "Modo de normalização", group = G_NORM, tooltip = TT_MODE, display = display.none)
+Anchor     anchIn     = input.enum(Anchor.auto, "Âncora", group = G_NORM, tooltip = TT_ANCH,
+     active = modeIn == Mode.sig or modeIn == Mode.imp, display = display.none)
+string     sessIn     = input.session("0830-1515", "Sessão personalizada (âncora)", group = G_NORM, tooltip = TT_SESS,
+     active = (modeIn == Mode.sig or modeIn == Mode.imp) and anchIn == Anchor.sess, display = display.none)
+int        wIn        = input.int(100, "Janela W", minval = 10, maxval = 1000, group = G_NORM, tooltip = TT_W,
+     active = modeIn == Mode.roll or modeIn == Mode.lz or modeIn == Mode.mm, display = display.none)
+Impact     lamIn      = input.enum(Impact.vm, "Escala de impacto λ", group = G_NORM, tooltip = TT_LAM,
+     active = modeIn == Mode.imp, display = display.none)
+bool       ovlIn      = input.bool(false, "Mostrar preço implícito no gráfico principal", group = G_NORM,
+     tooltip = TT_OVL, active = modeIn == Mode.imp, display = display.none)
+View       viewIn     = input.enum(View.lines, "Vista do painel", group = G_NORM, tooltip = TT_VIEW, display = display.none)
+bool       coneIn     = input.bool(false, "Cone nulo iid (±2σ)", group = G_NORM, tooltip = TT_CONE,
+     active = modeIn == Mode.sig, display = display.none)
+bool       bgIn       = input.bool(true, "Marcar âncoras e mudanças de qualidade", group = G_NORM, tooltip = TT_BG,
+     display = display.none)
+
+// ── Estatística ──
+int        nIn        = input.int(100, "Janela σ/ρ (N)", minval = 30, maxval = 300, group = G_STAT, tooltip = TT_N,
+     display = display.none)
+int        kIn        = input.int(20, "Horizonte da divergência (K)", minval = 5, maxval = 50, group = G_STAT,
+     tooltip = TT_K, display = display.none)
+int        mIn        = input.int(1000, "Janela de calibração (M)", minval = 300, maxval = 2000, group = G_STAT,
+     tooltip = TT_M, display = display.none)
+float      clipIn     = input.float(4.0, "Winsorizar unidades-σ em ±", minval = 2.0, maxval = 10.0, step = 0.5,
+     group = G_STAT, tooltip = TT_CLIP, display = display.none)
+float      thrIn      = input.float(2.0, "Limiar |Z|", minval = 0.5, maxval = 6.0, step = 0.1, group = G_STAT,
+     tooltip = TT_THR, display = display.none)
+float      thr2In     = input.float(3.0, "Limiar forte |Z|", minval = 1.5, maxval = 8.0, step = 0.1, group = G_STAT,
+     tooltip = TT_THR2, display = display.none)
+float      rhoMinIn   = input.float(0.30, "ρ mínimo (gate)", minval = 0.0, maxval = 0.9, step = 0.05, group = G_STAT,
+     tooltip = TT_RHO, display = display.none)
+
+// ── Eventos ──
+bool       evIn       = input.bool(true, "Eventos de absorção", group = G_EVT, tooltip = TT_EV, display = display.none)
+bool       pwfIn      = input.bool(true, "Eventos de preço sem fluxo", group = G_EVT, tooltip = TT_PWF,
+     display = display.none)
+int        evWinIn    = input.int(15, "Janela do evento (min)", minval = 1, maxval = 1440, group = G_EVT,
+     tooltip = TT_EVWIN, active = evIn or pwfIn, display = display.none)
+int        lifeIn     = input.int(60, "Vida máxima do evento (min)", minval = 1, maxval = 10080, group = G_EVT,
+     tooltip = TT_LIFE, active = evIn, display = display.none)
+float      zfIn       = input.float(2.0, "Limiar dos eventos (|zF|, |zP|)", minval = 0.5, maxval = 10.0, step = 0.1,
+     group = G_EVT, tooltip = TT_ZF, active = evIn or pwfIn, display = display.none)
+float      pinIn      = input.float(3.0, "Travado: |zF| mínimo", minval = 0.5, maxval = 10.0, step = 0.1,
+     group = G_EVT, tooltip = TT_PIN, active = evIn, display = display.none)
+float      pinPIn     = input.float(0.5, "Travado: |zP| máximo", minval = 0.0, maxval = 3.0, step = 0.1, group = G_EVT,
+     tooltip = TT_PINP, active = evIn, display = display.none)
+bool       lowConfIn  = input.bool(true, "Mostrar eventos com qualidade média (baixa confiança)", group = G_EVT,
+     tooltip = TT_LOWC, active = evIn or pwfIn, display = display.none)
+Lean       leanIn     = input.enum(Lean.neutral, "Viés direccional", group = G_EVT, tooltip = TT_LEAN,
+     active = evIn, display = display.none)
+bool       pivIn      = input.bool(false, "Divergência por pivots (clássica)", group = G_EVT, tooltip = TT_PIV,
+     display = display.none)
+int        pivLIn     = input.int(5, "Pivot: barras à esquerda", minval = 1, maxval = 50, group = G_EVT,
+     tooltip = TT_PIVL, active = pivIn, display = display.none)
+int        pivRIn     = input.int(2, "Pivot: barras à direita", minval = 1, maxval = 50, group = G_EVT,
+     tooltip = TT_PIVR, active = pivIn, display = display.none)
+int        pivMinIn   = input.int(5, "Pivot: distância mínima", minval = 1, maxval = 500, group = G_EVT,
+     tooltip = TT_PIVMIN, active = pivIn, display = display.none)
+int        pivMaxIn   = input.int(60, "Pivot: distância máxima", minval = 2, maxval = 1000, group = G_EVT,
+     tooltip = TT_PIVMAX, active = pivIn, display = display.none)
+float      pivMagIn   = input.float(0.5, "Pivot: diferença mínima de CVD (σΔ)", minval = 0.0, maxval = 20.0,
+     step = 0.1, group = G_EVT, tooltip = TT_PIVMAG, active = pivIn, display = display.none)
+
+// ── Estilo ──
+// Em linhas "inline" a TradingView mostra só o tooltip do último input da linha: todos levam o mesmo texto.
+color      pColIn     = input.color(#787B86, "Preço", group = G_STYLE, inline = "lin", tooltip = TT_COL,  // = C_PRICE_DEF
+     display = display.none)
+color      fColIn     = input.color(#AB47BC, "CVD", group = G_STYLE, inline = "lin", tooltip = TT_COL,
+     display = display.none)
+// Laranja escuro: ≥ 3:1 sobre fundo branco (o #FF9800 ficava em 2.2:1).
+color      pAheadIn   = input.color(#EF6C00, "Z > 0", group = G_STYLE, inline = "ahd", tooltip = TT_AHEAD,
+     display = display.none)
+color      fAheadIn   = input.color(#2962FF, "Z < 0", group = G_STYLE, inline = "ahd", tooltip = TT_AHEAD,
+     display = display.none)
+color      bullIn     = input.color(#26A69A, "Subida", group = G_STYLE, inline = "res", tooltip = TT_RES,
+     display = display.none)
+color      bearIn     = input.color(#EF5350, "Descida", group = G_STYLE, inline = "res", tooltip = TT_RES,
+     display = display.none)
+color      neutIn     = input.color(#787B86, "Neutro", group = G_STYLE, inline = "res", tooltip = TT_RES,
+     display = display.none)
+int        pWidthIn   = input.int(2, "Espessura: preço", minval = 1, maxval = 4, group = G_STYLE, inline = "wid",
+     tooltip = TT_WIDTH, display = display.none)
+int        fWidthIn   = input.int(2, "Espessura: CVD", minval = 1, maxval = 4, group = G_STYLE, inline = "wid",
+     tooltip = TT_WIDTH, display = display.none)
+
+// ── Tabela ──
+bool       tblIn      = input.bool(true, "Mostrar tabela", group = G_TBL, tooltip = TT_TBL, display = display.none)
+TblPos     tblPosIn   = input.enum(TblPos.tr, "Posição", group = G_TBL, tooltip = TT_TBLPOS, active = tblIn,
+     display = display.none)
+TblSize    tblSizeIn  = input.enum(TblSize.small, "Tamanho", group = G_TBL, tooltip = TT_TBLSIZE, active = tblIn,
+     display = display.none)
+TblMode    tblModeIn  = input.enum(TblMode.compact, "Versão", group = G_TBL, tooltip = TT_TBLMODE, active = tblIn,
+     display = display.none)
+
+// Sinalizadores de edição: na Standard são constantes falsas (a opção Footprint não existe).
+bool isFpSel  = srcIn == DeltaSrc.fp
+bool fpFillOn = isFpSel and fpFillIn
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// 5. FUNÇÕES (sem efeitos sobre variáveis globais)
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// Winsorização simétrica em ±c; preserva na.
+clip(float x, float c) =>
+    na(x) ? na : math.max(-c, math.min(c, x))
+
+// Pine não tem tanh/atanh: implementação directa com guarda numérica (exp limitado a ±40).
+tanhF(float y) =>
+    float e = math.exp(2.0 * math.max(-20.0, math.min(20.0, y)))
+    (e - 1.0) / (e + 1.0)
+
+atanhF(float x) =>
+    float c = math.max(-0.999, math.min(0.999, x))
+    0.5 * math.log((1.0 + c) / (1.0 - c))
+
+// Φ(z) normal padrão por Abramowitz–Stegun 7.1.26 (erro máximo ≈ 7e−8 em Φ).
+normCdf(float z) =>
+    float x = math.abs(z) / math.sqrt(2.0)
+    float t = 1.0 / (1.0 + 0.3275911 * x)
+    float e = 1.0 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * math.exp(-x * x)
+    0.5 * (1.0 + math.sign(z) * e)
+
+// RMS NÃO centrado dos valores válidos ANTERIORES de x (o valor actual nunca entra no próprio denominador).
+// Aquecimento: média expansiva de x² quando já há ≥ warm valores; janela de m valores quando há > m.
+// Devolve [RMS, nº de valores anteriores usados]; com nº ≤ m a calibração é provisória (média expansiva).
+// Função com estado: cada local de chamada tem o seu; tem de ser chamada em todas as barras, no âmbito global.
+rmsLag(float x, int m, int warm) =>
+    float x2 = x * x
+    float s  = math.sum(x2, m) / m           // média dos últimos m valores NÃO na (semântica documentada do math.sum)
+    var float cum   = 0.0
+    var int   cnt   = 0
+    var float sPrev = na                     // essa média na última barra válida anterior
+    float out = cnt > m ? math.sqrt(sPrev) : cnt >= warm ? math.sqrt(cum / cnt) : na
+    int   n0  = cnt
+    if not na(x2)
+        cum   += x2
+        cnt   += 1
+        sPrev := s
+    [out, n0]
+
+// Classificação de cada intrabar, avaliada DENTRO do contexto do timeframe inferior (estado contínuo
+// de intrabar para intrabar). Devolve [delta pela regra da vela, delta BVC-Normal, volume].
+//   Regra da vela (TradingView/ta v12): em 1T, cotações primeiro (≥ ask → +1; ≤ bid → −1; senão lado do
+//   ponto médio); depois fecho vs abertura; depois fecho vs fecho anterior; senão mantém o lado (nunca reinicia).
+//   BVC por intrabar (Easley-López de Prado-O'Hara 2012, adaptado): V·(2Φ(clip(ΔC/σ, ±10)) − 1), σ = stdev_100(ΔC).
+ltfSigned(int sigLen) =>
+    var int dir = 1
+    float cPrev = close[1]
+    float v     = nz(volume)
+    bool  hasQ  = not na(bid) and not na(ask) and ask > bid
+    float mid   = hasQ ? 0.5 * (bid + ask) : na
+    int   qDir  = hasQ ? (close >= ask ? 1 : close <= bid ? -1 : close > mid ? 1 : close < mid ? -1 : 0) : 0
+    int   pDir  = close > open ? 1 : close < open ? -1 : close > cPrev ? 1 : close < cPrev ? -1 : 0
+    dir := qDir != 0 ? qDir : pDir != 0 ? pDir : dir
+    float dp    = session.isfirstbar or na(cPrev) ? close - open : close - cPrev  // guarda de gap no BVC
+    float sg    = ta.stdev(dp, sigLen)                                          // calculado em todos os intrabars
+    float z     = sg > 0 ? clip(dp / sg, 10.0) : 0.0
+    [dir * v, v * (2.0 * normCdf(z) - 1.0), v]
+
+// Formatação de números para a tabela e os rótulos ("—" quando na), com o sinal menos tipográfico (−) do texto
+// fixo; um valor que arredonda para zero sai sem sinal.
+fnum(float x, string fmt) =>
+    string a = str.tostring(math.abs(x), fmt)
+    na(x) ? "—" : (x < 0 and str.tonumber(a) != 0 ? "−" : "") + a
+
+f2(float x) =>
+    fnum(x, "0.00")
+
+f3(float x) =>
+    fnum(x, "0.000")
+
+fs2(float x) =>
+    na(x) ? "—" : (x > 0 and str.tostring(x, "0.00") != "0.00" ? "+" : "") + fnum(x, "0.00")
+
+// Percentagem com sinal (NAR): +6.3%.
+fpct(float x) =>
+    na(x) ? "—" : (x > 0 and str.tostring(100.0 * x, "0.0") != "0.0" ? "+" : "") + fnum(100.0 * x, "0.0") + "%"
+
+// Nos alert() os números usam o hífen ASCII: as mensagens são lidas por webhooks e bots.
+fa2(float x) =>
+    na(x) ? "—" : str.tostring(x, "0.00")
+
+tierName(int t) =>
+    t >= 3 ? "alta" : t == 2 ? "média" : t == 1 ? "baixa (delta derivado do preço)" : "sem dados"
+
+tierShort(int t) =>
+    t >= 3 ? "alta" : t == 2 ? "média" : t == 1 ? "baixa" : "sem dados"
+
+// Três algarismos significativos (λ na tabela).
+fsig(float x) =>
+    float a = math.abs(x)
+    na(x) ? "—" : a >= 100 ? fnum(x, "0") : a >= 10 ? fnum(x, "0.0") : a >= 1 ? fnum(x, "0.00") : fnum(x, "0.000")
+
+// Unidade adaptativa de λ (bps por unidade de delta): expoente k de 10^(3k), k = 0..4, para o valor ficar ≥ 0.1
+// (λ por 1 BTC, por 1 milhão de USD, por 10⁹ unidades de uma meme coin, …).
+lamExp(float lam) =>
+    float a = math.abs(nz(lam))
+    a <= 0 or a >= 0.1 ? 0 : math.min(4, math.ceil(math.log10(0.1 / a) / 3.0))
+
+// Nome legível de um timeframe da TradingView ("1" → "1 min", "240" → "4 h", "1S" → "1 s", "1T" → "1 tick").
+tfName(string tf) =>
+    bool   sfx = str.endswith(tf, "S") or str.endswith(tf, "T")
+    string num = sfx ? str.substring(tf, 0, str.length(tf) - 1) : tf
+    string n   = num == "" ? "1" : num
+    float  mins = str.tonumber(tf)                   // minutos ("240" = 4 horas: timeframe.period exprime horas em minutos)
+    str.endswith(tf, "S") ? n + " s" : str.endswith(tf, "T") ? n + (n == "1" ? " tick" : " ticks") :
+         na(mins) ? tf : mins >= 60 and mins % 60 == 0 ? str.tostring(mins / 60) + " h" : tf + " min"
+
+// Nome da âncora a partir do timeframe de reinício.
+anchorName(string tf) =>
+    tf == "1D" ? "diária" : tf == "1W" ? "semanal" : tf == "1M" ? "mensal" : tf == "12M" ? "anual" : tf
+
+// Tipo de volume do símbolo (syminfo.volumetype) em português ("n/a" é o habitual fora de cripto).
+volTypeName(string vt) =>
+    vt == "base" ? "base (unidades do activo)" : vt == "quote" ? "cotação (moeda)" :
+         vt == "tick" ? "ticks (n.º de negócios)" : "não declarado (habitual fora de cripto)"
+
+// Cor de texto legível sobre um fundo opaco c (brilho percebido YIQ).
+txtOn(color c) =>
+    0.299 * color.r(c) + 0.587 * color.g(c) + 0.114 * color.b(c) > 125.0 ? #131722 : color.white
+
+// Estilo dos rótulos de eventos: cheio e opaco (qualidade alta) ou "oco" (baixa confiança): fundo tingido a 65% de
+// transparência e texto na cor do tema (a cor semântica fica no tom; contraste ≥ 6:1 nos temas claro e escuro).
+evBg(color c, bool lowC) =>
+    color.new(c, lowC ? 65 : 0)
+
+evFg(color c, bool lowC) =>
+    lowC ? chart.fg_color : txtOn(c)
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// 6. MOTOR DE DELTA
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// ── 6.1 Intrabars: um único pedido, tuplo de três arrays por barra do gráfico ──
+string ltf = switch precIn
+    Precision.t1     => "1T"
+    Precision.s1     => "1S"
+    Precision.m1     => "1"
+    Precision.custom => ltfCustIn
+    =>                  timeframe.isseconds ? "1S" : timeframe.isintraday ? "1" : timeframe.isdaily ? "5" : "60"
+
+// A linha seguinte tem de ficar numa só linha física (o harness de testes substitui o lado direito).
+[aCand, aBvc, aVol] = request.security_lower_tf(syminfo.tickerid, ltf, ltfSigned(100), ignore_invalid_timeframe = true)
+int   nIntra   = na(aVol) ? 0 : aVol.size()          // timeframe inválido → ID de array na (não um array vazio)
+float ltfDelta = nIntra > 0 ? (clsIn == Classifier.candle ? aCand.sum() : aBvc.sum()) : na
+float ltfVol   = nIntra > 0 ? aVol.sum() : na
+
+// ── 6.2 Footprint (só nesta edição; um único local de chamada, dentro de um if) ──
+float fpDelta = na
+float fpVol   = na
+// footprint.delta()/footprint.total_volume() → series float, id (footprint) não-na: referência v6 (fun_footprint.delta,
+// fun_footprint.total_volume) e o exemplo do manual (request.footprint → footprint.total_volume/delta, só com ID
+// válido; "the id parameter of each footprint.*() function does not allow na arguments").
+footprint fpObj = na
+if isFpSel
+    fpObj := request.footprint(ticksIn)
+if not na(fpObj)
+    fpDelta := footprint.delta(fpObj)
+    fpVol   := footprint.total_volume(fpObj)
+
+// ── 6.3 Fallback: BVC-Normal na barra do gráfico (derivado do preço) ──
+// rBar (bps, com guarda de gaps) é TAMBÉM o incremento de preço r usado por todas as estatísticas.
+float c1       = close[1]
+float rRaw     = 1e4 * math.log(close / c1)
+float sRaw     = ta.stdev(rRaw, 100)
+float sRawP    = sRaw[1]
+float rGap     = 1e4 * math.log(open / c1)
+bool  gapBar   = na(c1) or session.isfirstbar or math.abs(rGap) > 3.0 * nz(sRawP, 1e10)
+float rBar     = gapBar ? 1e4 * math.log(close / open) : rRaw
+float sBar     = ta.stdev(rBar, 100)
+float sBarP    = sBar[1]
+float zBar     = sBarP > 0 and not na(rBar) ? clip(rBar / sBarP, 10.0) : 0.0
+float barDelta = nz(volume) * (2.0 * normCdf(zBar) - 1.0)
+
+// ── 6.4 Qualidade configurada (tier): 3 alta · 2 média · 1 baixa · 0 sem dados ──
+bool ltfTick = str.endswith(ltf, "T")
+// Gráficos de ticks: timeframe.in_seconds() não está documentado para ticks e as janelas em minutos (eventos, vida,
+// âncora) precisam de barras de tempo → paragem explícita em vez de um comprimento na mais à frente.
+int  tfSec   = timeframe.isticks ? 1 : math.max(timeframe.in_seconds(), 1)
+if timeframe.isticks
+    runtime.error("Gráficos de ticks não são suportados: use um timeframe de tempo (segundos, minutos ou superior).")
+// Gráficos não padrão (Heikin Ashi, Renko, Range, Kagi, Line Break, P&F): OHLC sintético (o do Heikin Ashi passa
+// também ao pedido intrabar pelo syminfo.tickerid) → r, delta, Z, eventos e alertas sem sentido (o manual
+// desaconselha sinais e alertas nesses gráficos). chart.is_standard: simple bool.
+if not chart.is_standard
+    runtime.error("Tipo de gráfico não suportado: Heikin Ashi, Renko, Range, Kagi, Line Break e P&F usam preços " +
+         "sintéticos. Use velas, barras ou linha.")
+int  ltfSec  = 0
+if not ltfTick                                       // não chamar timeframe.in_seconds() com timeframes de ticks
+    ltfSec := timeframe.in_seconds(ltf)
+// Volume de ticks (declarado, ou FX à vista): conta negócios ou actualizações de cotação, sem lado agressor nem
+// quantidades → o delta é derivado do preço e, pela regra da fonte derivada do preço (dossier D8), qualidade
+// baixa: linhas sim, Z e eventos não.
+bool tickLike = syminfo.volumetype == "tick" or syminfo.type == "forex"
+int  hiTier   = tickLike ? 1 : 3
+// Primeiro "não inferior ao gráfico" (ex.: 1S num gráfico de 1S): 1 intrabar = a própria barra → delta derivado do
+// preço (circular com r), qualidade baixa. Alta só com evidência (dossier §3.2): intrabars de 1 tick ou de 1 s,
+// quase todos de um só lado, classificados pela regra da vela (o BVC com 1S ficou ao nível de 1 min). Os restantes
+// timeframes inferiores ao gráfico (minutos, 5S–45S, 10T+) e o BVC: média.
+bool ltfFine = ltf == "1T" or ltfSec == 1
+int  cfgTier = math.min(hiTier, not ltfTick and ltfSec >= tfSec ? 1 : ltfFine and clsIn == Classifier.candle ? 3 : 2)
+
+// ── 6.5 Selecção da fonte por barra ──
+float vol0   = nz(volume)
+bool  useFp  = isFpSel and not na(fpDelta)
+bool  useLtf = not useFp and srcIn != DeltaSrc.bar and nIntra > 0 and (srcIn == DeltaSrc.ltf or fpFillOn)
+float delta  = na
+float barVol = na
+int   tier   = 0
+int   tierP  = nz(tier[1])
+if srcIn == DeltaSrc.bar
+    delta  := barDelta
+    barVol := vol0
+    tier   := 1
+else if useFp
+    delta  := fpDelta
+    barVol := fpVol
+    tier   := hiTier
+else if useLtf
+    delta  := ltfDelta
+    barVol := ltfVol
+    tier   := cfgTier
+else if fallbackIn == Fallback.bvc
+    delta  := barDelta
+    barVol := vol0
+    tier   := 1
+if vol0 == 0                                         // barra sem volume: delta 0, mantém o tier (não parte as séries)
+    delta  := 0.0
+    barVol := 0.0
+    tier   := tierP
+
+// Barras consecutivas com qualidade ≥ média (as janelas estatísticas têm de caber inteiras nesse regime).
+var int hqRun = 0
+hqRun := tier >= 2 ? hqRun + 1 : 0
+// A janela de σ/ρ desfasados (barras t−N..t−1) está toda em qualidade ≥ média.
+int  hqRunP  = nz(hqRun[1])
+bool winFine = hqRunP >= nIn
+
+// Cobertura (para a tabela).
+var int nBars     = 0
+var int nCovBars  = 0
+var int nLtfBars  = 0
+var int nIntraSum = 0
+var float cumVol  = 0.0
+nBars  += 1
+cumVol += vol0
+if useFp or useLtf
+    nCovBars += 1
+if useLtf
+    nLtfBars  += 1
+    nIntraSum += nIntra
+
+// NAR de todo o histórico de qualidade ≥ média (desequilíbrio estrutural de agressores; base do aviso da deriva).
+// O NAR desde a âncora não serve para isso: de dia para dia varia ~2× mais do que o desequilíbrio persistente.
+var float hqDeltaSum = 0.0
+var float hqVolSum   = 0.0
+var int   hqBars     = 0
+if tier >= 2 and not na(delta)
+    hqDeltaSum += delta
+    hqVolSum   += nz(barVol)
+    hqBars     += 1
+float narHist = hqVolSum > 0 ? hqDeltaSum / hqVolSum : na
+// Aviso só com histórico longo (≥ M barras e ≥ 5 dias de barras) e sem a remoção da deriva já ligada.
+bool  narWarn = not driftIn and hqBars >= math.max(mIn, math.ceil(5 * 86400 / tfSec)) and math.abs(nz(narHist)) >= 0.03
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// 7. INCREMENTOS E ESTATÍSTICA (σ, ρ, Z, gate, pernas)
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// Todos os ta.*, math.sum e referências [] são calculados aqui, em todas as barras, e só depois combinados.
+float dSma  = ta.sma(delta, nIn)
+float dSmaP = dSma[1]
+float dRaw  = driftIn ? delta - dSmaP : delta        // remoção opcional da deriva do fluxo
+float d     = na(rBar) ? na : dRaw
+float r     = na(d) ? na : rBar                      // pernas alinhadas: as mesmas barras em σ, ρ e somas
+
+float sr    = ta.stdev(r, nIn)
+float sd    = ta.stdev(d, nIn)
+float rho   = ta.correlation(r, d, nIn)
+float srP   = sr[1]                                  // escalas desfasadas: a barra actual nunca se normaliza a si mesma
+float sdP   = sd[1]
+float rhoP  = rho[1]
+
+float urRaw = srP > 0 ? clip(r / srP, clipIn) : na
+float udRaw = sdP > 0 ? clip(d / sdP, clipIn) : na
+bool  uOk   = not na(urRaw) and not na(udRaw)
+float ur    = uOk ? urRaw : na
+float ud    = uOk ? udRaw : na
+
+// Janelas dos eventos (definidas aqui porque o hqOk depende delas). ke ≤ M/20 barras: o zF/zP fica calibrado em
+// ≥ 20 janelas e o histórico pedido por math.sum/ta.highest fica muito abaixo do limite de 5000 barras.
+int   keRaw   = math.max(1, math.round(evWinIn * 60.0 / tfSec))
+int   keMax   = math.max(1, math.floor(mIn / 20.0))
+int   ke      = math.min(keRaw, keMax)                             // janela do evento em barras
+int   life    = math.max(1, math.round(lifeIn * 60.0 / tfSec))      // vida máxima em barras
+
+// Z só quando as janelas σ/ρ de TODOS os termos das somas (K e ke) cabem inteiras em barras de qualidade ≥ média:
+// o termo mais antigo da soma K usa σ de [t−K+1−N, t−K]; com a deriva removida, a SMA_N recua mais N barras.
+int   hqNeed  = nIn + math.max(kIn, ke) + (driftIn ? nIn : 0)
+bool  hqOk    = tier >= 2 and hqRun >= hqNeed
+
+float sumDiffK = math.sum(ur - ud, kIn)
+float sumUrK   = math.sum(ur, kIn)
+float sumUdK   = math.sum(ud, kIn)
+float dDen     = math.sqrt(2.0 * kIn * (1.0 - math.min(nz(rhoP), 0.95)))
+float dStat    = hqOk ? sumDiffK / dDen : na         // D_t (C1 simétrico)
+[rmsD, nCalD]  = rmsLag(dStat, mIn, nIn)
+float zDiv     = rmsD > 0 and not na(dStat) ? dStat / rmsD : na
+
+var int dCnt = 0                                     // nº de valores válidos de D (progresso do aquecimento)
+if not na(dStat)
+    dCnt += 1
+// Com < M valores o RMS é uma média expansiva de poucos valores efectivos (soma K sobreposta): Z provisório.
+bool   calProv = nCalD <= mIn
+string calTxt  = calProv ? " · calibração provisória (" + str.tostring(nCalD) + "/" + str.tostring(mIn) + ")" : ""
+// Menos de ~20 somas K independentes no RMS: o Z é demasiado incerto para a intensidade plena no painel.
+bool   zWeak   = nCalD < 20 * kIn
+
+float rhoMin  = math.max(rhoMinIn, tanhF(1.96 / math.sqrt(nIn - 3)))
+bool  gateOn  = hqOk and not na(rhoP) and rhoP >= rhoMin
+float pLeg    = sumUrK / math.sqrt(kIn)
+float fLeg    = sumUdK / math.sqrt(kIn)
+float lamOlsP = sdP > 0 and srP > 0 ? nz(rhoP) * srP / sdP : na    // bps por unidade de delta
+float lamSigP = sdP > 0 and srP > 0 ? srP / sdP : na
+
+// Fonte efectiva desta barra (tabela e alertas).
+string srcTxt = srcIn == DeltaSrc.bar ? "barras do gráfico (BVC)" :
+     useLtf ? "intrabar " + tfName(ltf) + (clsIn == Classifier.candle ? " · regra da vela" : " · BVC") :
+     fallbackIn == Fallback.bvc ? "sem intrabars → BVC na barra" : "sem intrabars → sem dados"
+if useFp
+    srcTxt := "footprint · " + str.tostring(ticksIn) + " ticks/linha"
+else if isFpSel and not useLtf
+    srcTxt := fallbackIn == Fallback.bvc ? "sem footprint → BVC na barra" : "sem footprint → sem dados"
+else if isFpSel
+    srcTxt := "sem footprint → intrabar " + tfName(ltf)
+
+// Estado neutro da divergência (sinal de Z + perna dominante; direcção só pelo preço). Sem sinais: diz porquê e o que
+// fazer. stateTxt = texto completo (alertas e dica); stateShort = versão curta para a tabela (a tabela fica no canto
+// do painel, sobre as barras recentes); a explicação vai para a dica (stateTip). A calibração vai à parte (calTxt).
+string fineName = isFpSel and not useLtf ? "footprint" : "intrabars"
+string warmHint = isFpSel ? "reduza N" : "use precisão mais grossa ou reduza N"
+string ltfHint  = tfSec <= 1 ? "Escolha 1T (Ultimate)." : tfSec <= 60 ? "Escolha 1S (Premium+) ou 1T (Ultimate)." :
+     "Escolha um timeframe inferior ao gráfico (ex.: 1 minuto, 1S ou 1T)."
+string stateTxt = ""
+string stateTip = ""
+if srcIn == DeltaSrc.bar
+    stateTxt := "Sem sinais: delta derivado do preço"
+    stateTip := "Fonte «Só barras do gráfico»: o delta é estimado a partir do próprio preço (BVC na barra)."
+else if tier == 0
+    stateTxt := "Sem dados de delta nesta barra"
+else if tier == 1 and tickLike and (useLtf or useFp)
+    stateTxt := "Sem sinais: volume de ticks (sem lado agressor)"
+    stateTip := "O volume deste símbolo conta negócios ou, em FX à vista e CFD, actualizações de cotação: não há lado " +
+         "agressor e o delta é derivado do preço. As linhas são só visuais."
+else if tier == 1 and useLtf
+    // Caso típico: Auto num gráfico de 1 min (intrabars de 1 min) ou de 1 s (intrabars de 1 s).
+    stateTxt := tfSec <= 1 ? "Sem sinais no gráfico de 1 s: escolha 1T" : tfSec <= 60 ? "Sem sinais no gráfico de " +
+         tfName(timeframe.period) + ": escolha 1S ou 1T" : "Sem sinais: intrabars de " + tfName(ltf) + " não inferiores ao gráfico"
+    stateTip := "Intrabars de " + tfName(ltf) + " não inferiores ao gráfico: 1 intrabar = a própria barra e o delta é " +
+         "uma cópia do preço. " + ltfHint
+else if tier == 1 and nCovBars == 0
+    stateTxt := "Sem sinais: nenhuma barra com " + fineName + (fineName == "intrabars" ? " de " + tfName(ltf) : "")
+    stateTip := "O plano ou o símbolo pode não suportar " + (fineName == "intrabars" ? "este timeframe inferior" :
+         "o footprint") + "; o delta é derivado do preço (BVC na barra)."
+else if tier == 1
+    stateTxt := "Sem sinais: barra sem " + fineName
+    stateTip := "Barra para lá do limite de " + fineName + " do plano (ou falha nos dados): delta derivado do preço."
+else if na(zDiv)
+    stateTxt := "Em aquecimento (" + str.tostring(math.min(hqRun, hqNeed) + math.min(dCnt, nIn)) + "/" +
+         str.tostring(hqNeed + nIn) + ")"
+    stateTip := "Só " + str.tostring(hqRun) + " barras seguidas com qualidade ≥ média: são precisas " +
+         str.tostring(hqNeed) + " barras seguidas e depois " + str.tostring(nIn) + " valores de D. Para encurtar, " +
+         warmHint + "."
+else if not gateOn
+    stateTxt := na(rhoP) ? "Gate fechado: ρ indisponível" : rhoP < 0 ? "Gate fechado: ρ negativo" :
+         "Gate fechado: ρ = " + f2(rhoP) + " < " + f2(rhoMin)
+    stateTip := rhoP < 0 ? "ρ negativo: possível problema de dados." : ""
+else if zDiv <= -thrIn
+    stateTxt := math.abs(fLeg) > math.abs(pLeg) ? "Fluxo comprador sem subida proporcional do preço" :
+         "Preço a cair sem fluxo vendedor proporcional"
+else if zDiv >= thrIn
+    stateTxt := math.abs(fLeg) > math.abs(pLeg) ? "Fluxo vendedor sem queda proporcional do preço" :
+         "Preço a subir sem fluxo comprador proporcional"
+else
+    stateTxt := "Sem divergência significativa"
+// Versão curta dos quatro estados de divergência; o texto completo passa para a dica.
+bool   divState   = gateOn and not na(zDiv) and math.abs(zDiv) >= thrIn
+string stateShort = not divState ? stateTxt : zDiv < 0 ? (math.abs(fLeg) > math.abs(pLeg) ? "Compras sem subida do preço" :
+     "Preço a cair sem vendas") : math.abs(fLeg) > math.abs(pLeg) ? "Vendas sem queda do preço" : "Preço a subir sem compras"
+if divState
+    stateTip := stateTxt + "."
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// 8. CVD, ÂNCORA E LINHAS DE VISUALIZAÇÃO (tudo causal)
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// CVD contínuo (desde a primeira barra com delta válido): só para os modos em janela e para os pivots.
+var float cvdC = na
+if not na(d)
+    cvdC := nz(cvdC) + d
+
+// Âncora: Auto = 1D (≤ 1h), 1W (< 1D), 1M (< 1W), 12M; manual só se for maior do que o gráfico.
+string autoTf   = tfSec <= 3600 ? "1D" : tfSec < 86400 ? "1W" : tfSec < 604800 ? "1M" : "12M"
+string manTf    = switch anchIn
+    Anchor.d1  => "1D"
+    Anchor.w1  => "1W"
+    Anchor.mo1 => "1M"
+    =>            autoTf
+bool   isManual = anchIn == Anchor.d1 or anchIn == Anchor.w1 or anchIn == Anchor.mo1
+bool   manOk    = timeframe.in_seconds(manTf) > tfSec
+string anchTf   = manOk ? manTf : autoTf
+bool   tfChg    = timeframe.change(anchTf)           // global, em todas as barras
+bool   rthFirst = session.isfirstbar_regular
+// Sessão personalizada: 1.ª barra dentro da sessão; ou a barra que contém a hora de início (sessões de 24 h e dados só
+// da sessão); ou a 1.ª barra do dia, só para sessões que NÃO atravessam a meia-noite (numa sessão 1700-1600 a
+// meia-noite cai dentro da sessão e não pode reiniciar as linhas). Início/fim lidos de "HHMM-HHMM[:dias]".
+int    sessStartS = int(nz(str.tonumber(str.substring(sessIn, 0, 2)))) * 3600 + int(nz(str.tonumber(str.substring(sessIn, 2, 4)))) * 60
+int    sessEndS   = int(nz(str.tonumber(str.substring(sessIn, 5, 7)))) * 3600 + int(nz(str.tonumber(str.substring(sessIn, 7, 9)))) * 60
+bool   sessOvn    = sessEndS <= sessStartS          // atravessa a meia-noite (ou 24 h)
+int    barSecDay  = hour * 3600 + minute * 60 + second   // abertura da barra, em segundos do dia (hora da bolsa)
+bool   startInBar = (sessStartS - barSecDay + 86400) % 86400 < tfSec
+bool   inSess    = not na(time(timeframe.period, sessIn))
+bool   inSessP   = inSess[1]
+bool   dayChg    = dayofmonth != dayofmonth[1]
+bool   sessFirst = inSess and (not inSessP or startInBar or (dayChg and not sessOvn))
+bool   rthOk    = tfSec < 86400                      // RTH e sessão personalizada só fazem sentido em intradiário
+bool   useRth   = anchIn == Anchor.rth and rthOk
+bool   useSess  = anchIn == Anchor.sess and rthOk
+bool   anchWarn = (isManual and not manOk) or ((anchIn == Anchor.rth or anchIn == Anchor.sess) and not rthOk)
+bool   anchored = modeIn == Mode.sig or modeIn == Mode.imp
+string anchBase = useRth ? "sessão regular (RTH)" : useSess ? "sessão " + sessIn : anchorName(anchTf)
+
+var float lnA      = na
+var float cvdA     = 0.0                             // CVD ancorado (de d)
+var float cvdRawA  = 0.0                             // delta bruto acumulado (para o NAR)
+var float volA     = 0.0
+var float srA      = na                              // σ e ρ congelados na âncora
+var float sdA      = na
+var float rhoA     = na
+var int   anchorId = 0
+var int   anchorBar = na
+var bool  anchFine = false                           // σ/ρ congelados estimados só com barras de qualidade ≥ média
+var bool  anchSeam = false                           // âncora actual criada na entrada em dados finos
+bool firstInit = na(lnA) and not na(d)               // primeira barra em que as pernas podem nascer
+bool calAnch   = useRth ? rthFirst : useSess ? sessFirst : tfChg
+// Costura de cobertura: se a escala congelada veio de uma janela com barras de qualidade baixa (delta derivado do preço,
+// outra escala e ρ inflacionado), as linhas reiniciam na 1.ª barra cuja janela σ/ρ está toda em dados finos.
+bool seamAnch  = not na(lnA) and srA > 0 and sdA > 0 and not anchFine and winFine and tier >= 2 and not calAnch
+bool newAnchor = firstInit or (not na(lnA) and (calAnch or seamAnch))
+if newAnchor
+    lnA       := math.log(open)
+    cvdA      := 0.0
+    cvdRawA   := 0.0
+    volA      := 0.0
+    srA       := srP
+    sdA       := sdP
+    rhoA      := rhoP
+    anchFine  := winFine
+    anchSeam  := seamAnch
+    anchorId  += 1
+    anchorBar := bar_index
+else
+    if not (srA > 0) or not (sdA > 0)                // aquecimento: tenta de novo até haver escalas
+        srA      := srP
+        sdA      := sdP
+        rhoA     := rhoP
+        anchFine := winFine
+    if na(rhoA)
+        rhoA := rhoP
+cvdA    += nz(d)
+cvdRawA += nz(delta)
+volA    += na(delta) ? 0.0 : nz(barVol)
+float nar = volA > 0 ? cvdRawA / volA : na           // rácio de agressão líquida desde a âncora ∈ [−1, 1]
+string anchName = anchBase + (anchSeam ? " (reiniciada no início da cobertura)" : "")
+
+// Séries de apoio (globais, em todas as barras).
+float lnC   = math.log(close)
+float lnCW  = lnC[wIn]
+float cvdCW = cvdC[wIn]
+float lnSma = ta.sma(lnC, wIn)
+float lnSd  = ta.stdev(lnC, wIn)
+float cSma  = ta.sma(cvdC, wIn)
+float cSd   = ta.stdev(cvdC, wIn)
+float pHi   = ta.highest(close, wIn)
+float pLo   = ta.lowest(close, wIn)
+float cHi   = ta.highest(cvdC, wIn)
+float cLo   = ta.lowest(cvdC, wIn)
+
+// Modo sig (por omissão): unidades-σ ancoradas.
+float pSig  = srA > 0 and not na(lnA) ? 1e4 * (lnC - lnA) / srA : na
+float fSig  = sdA > 0 ? cvdA / sdA : na
+// Modo imp: preço implícito pelo fluxo (λ em bps por unidade de delta, congelado na âncora).
+float lamA  = sdA > 0 and srA > 0 ? (lamIn == Impact.ols ? nz(rhoA) : 1.0) * srA / sdA : na
+float fImp  = na(lamA) or na(lnA) ? na : math.exp(lnA + lamA * cvdA / 1e4)
+// Modo roll: unidades-σ numa janela móvel de W barras (sem reinícios).
+float pRoll = srP > 0 ? 1e4 * (lnC - lnCW) / srP : na
+float fRoll = sdP > 0 ? (cvdC - cvdCW) / sdP : na
+// Modo lz (só visual): z-score de níveis sobre W barras.
+float pLz   = lnSd > 0 ? (lnC - lnSma) / lnSd : na
+float fLz   = cSd > 0 ? (cvdC - cSma) / cSd : na
+// Modo mm (só visual): min–máx em −100..+100 sobre W barras.
+float pMm   = pHi - pLo > 0 ? 100.0 * (2.0 * (close - pLo) / (pHi - pLo) - 1.0) : na
+float fMm   = cHi - cLo > 0 ? 100.0 * (2.0 * (cvdC - cLo) / (cHi - cLo) - 1.0) : na
+
+float pSel = switch modeIn
+    Mode.sig  => pSig
+    Mode.imp  => close
+    Mode.roll => pRoll
+    Mode.lz   => pLz
+    =>           pMm
+float fSel = switch modeIn
+    Mode.sig  => fSig
+    Mode.imp  => fImp
+    Mode.roll => fRoll
+    Mode.lz   => fLz
+    =>           fMm
+// Sem delta nesta barra → ambas as pernas na. Na barra de reinício da âncora as linhas ancoradas interrompem-se
+// (plot.style_linebr): o valor ≈ 0 de uma barra não acrescenta nada e evita uma ligação vertical enganadora.
+bool  resetBar = newAnchor and anchored
+float pLine = na(d) or (resetBar and modeIn == Mode.sig) ? na : pSel
+float fLine = na(d) or resetBar ? na : fSel
+
+// Cone nulo iid (±2σ) em torno da linha do preço, só em unidades-σ ancoradas.
+int   nSince = na(anchorBar) ? 0 : bar_index - anchorBar + 1
+float coneW  = 2.0 * math.sqrt(2.0 * nSince * (1.0 - math.max(nz(rhoA), 0.0)))
+bool  coneOn = coneIn and modeIn == Mode.sig
+float coneUp = coneOn and not na(pLine) ? pLine + coneW : na
+float coneDn = coneOn and not na(pLine) ? pLine - coneW : na
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// 9. EVENTOS DE JANELA CURTA, MÁQUINA DE RESOLUÇÃO E PIVOTS
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+float sumUdKe = math.sum(ud, ke)
+float sumUrKe = math.sum(ur, ke)
+float sumRKe  = math.sum(r, ke)
+float sumDKe  = math.sum(d, ke)
+float fE      = hqOk ? sumUdKe / math.sqrt(ke) : na
+float pE      = hqOk ? sumUrKe / math.sqrt(ke) : na
+[rmsF, nCalF] = rmsLag(fE, mIn, nIn)
+[rmsP, nCalP] = rmsLag(pE, mIn, nIn)
+float zF      = rmsF > 0 and not na(fE) ? fE / rmsF : na
+float zP      = rmsP > 0 and not na(pE) ? pE / rmsP : na
+int   nCalE   = math.min(nCalF, nCalP)
+string evCalTxt = nCalE <= mIn ? "\nCalibração provisória (" + str.tostring(nCalE) + "/" + str.tostring(mIn) + ")" : ""
+float hiKe    = ta.highest(high, ke)
+float loKe    = ta.lowest(low, ke)
+// Eficiência de impacto η = Σr / (λ_OLS·ΣΔ) na janela do evento: só contexto (não é gatilho; o impacto é côncavo).
+bool  etaOk   = not na(fE) and math.abs(fE) >= 1.5 and not na(lamOlsP) and lamOlsP != 0 and nz(sumDKe) != 0
+float eta     = etaOk ? sumRKe / (lamOlsP * sumDKe) : na
+
+// Classes (séries globais; todas exigem o gate aberto). "Travado" (|zF| ≥ 3, |zP| ≤ 0.5) entra na absorção por
+// união: inclui casos com o preço ligeiramente no sentido do fluxo (a classe da investigação não os excluía), mas
+// nunca a classe CONFIRMADO do dossier §6.5 (s·zP ≥ |ρ|·|zF|: o preço acompanhou o fluxo), que um |zP| máximo
+// alto deixaria entrar. Com os valores por omissão a exclusão não muda nada (|ρ|·|zF| ≥ 0.3·3 > 0.5).
+bool  zOk      = not na(zF) and not na(zP)
+float sF       = math.sign(nz(zF))
+float sP       = math.sign(nz(zP))
+bool  pinned   = gateOn and zOk and math.abs(zF) >= pinIn and math.abs(zP) <= pinPIn and sF * zP < math.abs(nz(rhoP)) * math.abs(zF)
+bool  absorbed = gateOn and zOk and ((math.abs(zF) >= zfIn and sF * zP <= 0) or pinned)
+bool  pwf      = gateOn and zOk and not absorbed and math.abs(zP) >= zfIn and sP * zF <= 0
+// Aglomerados por classe E por lado: começa um novo quando o lado muda (ex.: compras absorvidas e, na barra seguinte,
+// vendas absorvidas, comum com ke = 1) ou quando passaram mais de ke barras desde a última barra da mesma classe e do
+// mesmo lado (período refractário de ke barras, como a histerese dos alertas de Z: um mergulho de 1–2 barras do |zF|
+// abaixo do limiar não cria um evento novo nem substitui o pendente). Estado actualizado em todas as barras.
+int  absSide = absorbed ? (sF > 0 ? 1 : -1) : 0
+int  pinSide = pinned ? (sF > 0 ? 1 : -1) : 0
+int  pwfSide = pwf ? (sP > 0 ? 1 : -1) : 0
+var int absLastBar  = na
+var int absLastSide = 0
+var int pinLastBar  = na
+var int pinLastSide = 0
+var int pwfLastBar  = na
+var int pwfLastSide = 0
+bool absNewCl = absorbed and not (absLastSide == absSide and not na(absLastBar) and bar_index - absLastBar <= ke)
+bool pinNewCl = pinned and not (pinLastSide == pinSide and not na(pinLastBar) and bar_index - pinLastBar <= ke)
+bool pwfNewCl = pwf and not (pwfLastSide == pwfSide and not na(pwfLastBar) and bar_index - pwfLastBar <= ke)
+if absorbed
+    absLastBar  := bar_index
+    absLastSide := absSide
+if pinned
+    pinLastBar  := bar_index
+    pinLastSide := pinSide
+if pwf
+    pwfLastBar  := bar_index
+    pwfLastSide := pwfSide
+bool  tierEvOk = tier >= 3 or (tier == 2 and lowConfIn)
+bool  lowConf  = tier == 2
+// Calibração fraca do zF/zP: menos de 2N valores (o aquecimento de 2N do dossier §6.3; em dados reais o |zF| passa o
+// limiar mais vezes nessa fase) ou menos de ~20 janelas ke independentes. Rótulo oco e sem alertas.
+bool  evWeak   = nCalE < math.max(20 * ke, 2 * nIn)
+bool  hollow   = lowConf or evWeak
+// Só a primeira barra de cada aglomerado (de cada classe e lado), e só em barras confirmadas.
+bool  newAbs   = barstate.isconfirmed and evIn and tierEvOk and absNewCl
+bool  newPin   = barstate.isconfirmed and evIn and tierEvOk and pinNewCl
+bool  newPwf   = barstate.isconfirmed and pwfIn and tierEvOk and pwfNewCl
+var int absStart = na                                // 1.ª barra do aglomerado de absorção em curso
+if absNewCl
+    absStart := bar_index
+
+color bullCol  = bullIn
+color bearCol  = bearIn
+color neutCol  = neutIn
+string htfNote = tfSec >= 3600 ? "\n" + NOTE_HTF : ""
+string winTxt  = " · janela " + str.tostring(ke) + (ke == 1 ? " barra" : " barras")
+
+// ── Máquina de resolução da absorção (um evento pendente; um novo substitui o anterior) ──
+var int    evSide     = 0                            // +1 fluxo comprador absorvido, −1 vendedor, 0 nenhum
+var float  evHi       = na
+var float  evLo       = na
+var int    evBar      = na
+var bool   evLowC     = false                        // evento pendente oco (baixa confiança ou calibração fraca)
+var bool   evWeakC    = false                        // evento pendente com calibração fraca (sem alertas)
+var label  evLbl      = na
+var string evTipS     = ""                           // dica do rótulo pendente (cresce com a resolução)
+var string lastEvTxt  = "—"                          // último evento (texto base; etiquetas compostas na tabela)
+var bool   lastEvPinT = false
+var bool   lastEvLow  = false
+var bool   lastEvWeak = false
+var string lastEvRes  = ""
+var string lastEvTip  = ""
+var int    lastEvBar  = na
+var bool   lastIsAbs  = false
+bool   resCont = false
+bool   resHeld = false
+bool   resExp  = false
+int    resSide = 0                                   // lado do evento resolvido nesta barra (antes do reinício)
+bool   resLowC = false                               // o evento resolvido era de baixa confiança (rótulo oco)
+bool   resWeak = false                               // ... ou tinha calibração fraca (então a resolução não alerta)
+string resTxt  = ""
+
+if barstate.isconfirmed and evSide != 0 and bar_index > evBar
+    bool isCont = evSide > 0 ? close > evHi : close < evLo
+    bool isHeld = evSide > 0 ? close < evLo : close > evHi
+    bool isExp  = not isCont and not isHeld and bar_index - evBar >= life
+    if isCont or isHeld or isExp
+        color  resCol   = isCont ? (evSide > 0 ? bullCol : bearCol) : isHeld ? (evSide > 0 ? bearCol : bullCol) : neutCol
+        string hiTxt    = "acima do máximo do evento"
+        string loTxt    = "abaixo do mínimo do evento"
+        // Seta = sentido em que o preço resolveu (não depende só da cor).
+        string upDn     = (isCont ? evSide > 0 : evSide < 0) ? "↑" : "↓"
+        string resShort = isCont ? "→ continuação " + upDn : isHeld ? "→ absorção segurou " + upDn : "→ expirou"
+        resTxt  := isCont ? "→ continuação " + upDn + " (fecho " + (evSide > 0 ? hiTxt : loTxt) + ")" :
+             isHeld ? "→ segurou " + upDn + ": o lado passivo venceu (fecho " + (evSide > 0 ? loTxt : hiTxt) + ")" :
+             "→ expirou sem resolução"
+        resCont := isCont
+        resHeld := isHeld
+        resExp  := isExp
+        resSide := evSide
+        resLowC := evLowC
+        resWeak := evWeakC
+        label.set_text(evLbl, label.get_text(evLbl) + "\n" + resShort)
+        label.set_tooltip(evLbl, evTipS + "\n" + resTxt)
+        label.set_color(evLbl, evBg(resCol, evLowC))
+        label.set_textcolor(evLbl, evFg(resCol, evLowC))
+        if lastIsAbs and lastEvBar == evBar
+            lastEvRes := resShort
+            lastEvTip := evTipS + "\n" + resTxt
+        evSide := 0
+
+if newAbs
+    if evSide != 0
+        label.set_text(evLbl, label.get_text(evLbl) + "\n→ substituído")
+        label.set_tooltip(evLbl, evTipS + "\n→ substituído por um evento mais recente")
+        label.set_color(evLbl, evBg(neutCol, evLowC))
+        label.set_textcolor(evLbl, evFg(neutCol, evLowC))
+    evSide := sF > 0 ? 1 : -1
+    evHi   := hiKe
+    evLo   := loKe
+    evBar  := bar_index
+    evLowC  := hollow
+    evWeakC := evWeak
+    string evBase = evSide > 0 ? "Compras absorvidas" : "Vendas absorvidas"
+    // Viés direccional só em eventos de qualidade alta (não ocos): onde o efeito nem sequer foi observado, neutro.
+    color  c0     = hollow ? neutCol : leanIn == Lean.cont ? (evSide > 0 ? bullCol : bearCol) :
+         leanIn == Lean.rev ? (evSide > 0 ? bearCol : bullCol) : neutCol
+    // Sufixo de confiança no próprio rótulo (spec §7), com as mesmas etiquetas da tabela.
+    string confSfx = lowConf ? " (baixa conf.)" : evWeak ? " (cal. prov.)" : ""
+    evTipS := (evSide > 0 ? "Fluxo comprador absorvido" : "Fluxo vendedor absorvido") +
+         (pinned ? " · preço travado (fluxo extremo, preço quase parado)" : "") + (lowConf ? " · baixa confiança" : "") +
+         (evWeak ? " · calibração provisória (sem alertas)" : "") +
+         "\nzF = " + f2(zF) + " · zP = " + f2(zP) + winTxt + "\nρ = " + f2(rhoP) + " · Z = " + f2(zDiv) +
+         "\nQualidade: " + tierName(tier) + evCalTxt + "\nRótulo neutro: o preço resolve (continuação se fechar além do " +
+         "extremo da janela no sentido do fluxo; absorção segurou no sentido oposto). Evidência direccional fraca e " +
+         "não validada." + htfNote
+    evLbl := label.new(bar_index, evSide > 0 ? high : low, evBase + (pinned ? " · preço travado" : "") + confSfx, xloc = xloc.bar_index,
+         yloc = yloc.price, color = evBg(c0, evLowC), style = evSide > 0 ? label.style_label_down : label.style_label_up,
+         textcolor = evFg(c0, evLowC), size = size.tiny, tooltip = evTipS, force_overlay = true)
+    lastEvTxt  := evBase
+    lastEvPinT := pinned
+    lastEvLow  := lowConf
+    lastEvWeak := evWeak
+    lastEvRes  := "· por resolver"
+    lastEvTip  := evTipS
+    lastEvBar  := bar_index
+    lastIsAbs  := true
+
+// Preço travado que surge dentro de um aglomerado de absorção já assinalado: marca o rótulo pendente desse aglomerado.
+if newPin and not newAbs and evSide != 0 and evBar == absStart and evSide == sF
+    label.set_text(evLbl, label.get_text(evLbl) + "\n· preço travado")
+    evTipS := evTipS + "\nPreço travado " + str.tostring(bar_index - evBar) + (bar_index - evBar == 1 ? " barra" : " barras") +
+         " depois: zF = " + f2(zF) + " · zP = " + f2(zP)
+    label.set_tooltip(evLbl, evTipS)
+    if lastIsAbs and lastEvBar == evBar
+        lastEvPinT := true
+        lastEvTip  := evTipS
+
+if newPwf
+    string pwTxt = sP > 0 ? "Preço ↑ sem fluxo comprador" : "Preço ↓ sem fluxo vendedor"
+    // Mecanismos por sentido (dossier §6.4): subida sem compras / descida sem vendas.
+    string pwWhy = sP > 0 ? "recompra de vendas a descoberto com ordens limite, retirada de ofertas de venda ou notícia" :
+         "retirada de ofertas de compra ou notícia (pode ser permanente)"
+    string pwTip = (sP > 0 ? "Preço a subir sem fluxo comprador" : "Preço a cair sem fluxo vendedor") +
+         (lowConf ? " · baixa confiança" : "") + (evWeak ? " · calibração provisória (sem alertas)" : "") +
+         "\nzP = " + f2(zP) + " · zF = " + f2(zF) + winTxt + "\nρ = " + f2(rhoP) + " · Z = " + f2(zDiv) + "\nQualidade: " +
+         tierName(tier) + evCalTxt + "\nRótulo neutro: pode ser " + pwWhy + "; sem evidência de reversão." + htfNote
+    string pwSfx = lowConf ? " (baixa conf.)" : evWeak ? " (cal. prov.)" : ""
+    label.new(bar_index, sP > 0 ? high : low, pwTxt + pwSfx, xloc = xloc.bar_index, yloc = yloc.price, color = evBg(neutCol, hollow),
+         style = sP > 0 ? label.style_label_down : label.style_label_up, textcolor = evFg(neutCol, hollow), size = size.tiny,
+         tooltip = pwTip, force_overlay = true)
+    lastEvTxt  := pwTxt
+    lastEvPinT := false
+    lastEvLow  := lowConf
+    lastEvWeak := evWeak
+    lastEvRes  := ""
+    lastEvTip  := pwTip
+    lastEvBar  := bar_index
+    lastIsAbs  := false
+
+// ── Divergência por pivots (clássica, opcional): CVD contínuo lido na barra do pivot do preço ──
+// Os desenhos convertem bar_index em time internamente; uma linha em tempo real até pivMax + R barras atrás
+// (≤ 1050 com os inputs permitidos) exige esse histórico de "time" (concepts/common_errors.md).
+max_bars_back(time, 1100)
+float ph        = ta.pivothigh(high, pivLIn, pivRIn)
+float pl        = ta.pivotlow(low, pivLIn, pivRIn)
+float cvdAtPiv  = cvdC[pivRIn]
+float fAtPiv    = fLine[pivRIn]
+int   anchAtPiv = anchorId[pivRIn]
+var float lastPh     = na
+var float lastPhCvd  = na
+var float lastPhF    = na
+var int   lastPhBar  = na
+var int   lastPhAnch = na
+var float lastPl     = na
+var float lastPlCvd  = na
+var float lastPlF    = na
+var int   lastPlBar  = na
+var int   lastPlAnch = na
+bool pivTop = false
+bool pivBot = false
+string pivTip = "Divergência clássica por pivots: o CVD é lido na barra do pivot do preço e o sinal só é conhecido " +
+     str.tostring(pivRIn) + " barras depois.\nEvidência: num teste interno a extremos de 4 h (não a estes pivots), a " +
+     "não-confirmação do CVD não acrescentou vantagem à reversão habitual. Contexto, não previsão."
+
+if barstate.isconfirmed and not na(ph)
+    int pb = bar_index - pivRIn
+    if pivIn and not na(lastPhBar) and not na(cvdAtPiv) and not na(lastPhCvd) and sdP > 0
+        int  gap    = pb - lastPhBar
+        bool hqSpan = hqRun > bar_index - lastPhBar       // os dois pivots dentro do mesmo regime de qualidade ≥ média
+        if gap >= pivMinIn and gap <= pivMaxIn and hqSpan and ph > lastPh and cvdAtPiv <= lastPhCvd - pivMagIn * sdP
+            pivTop := true
+            // Estado não resolvido: estilo neutro e oco (só os estados resolvidos levam cor direccional).
+            label.new(pb, ph, "Topo sem confirmação do fluxo", xloc = xloc.bar_index, yloc = yloc.price, color = evBg(neutCol, true),
+                 style = label.style_label_down, textcolor = evFg(neutCol, true), size = size.tiny, tooltip = pivTip, force_overlay = true)
+            if viewIn != View.hist and not na(fAtPiv) and not na(lastPhF) and (not anchored or anchAtPiv == lastPhAnch)
+                line.new(lastPhBar, lastPhF, pb, fAtPiv, xloc = xloc.bar_index, color = neutCol, style = line.style_dotted, width = 1)
+    lastPh     := ph
+    lastPhCvd  := cvdAtPiv
+    lastPhF    := fAtPiv
+    lastPhBar  := pb
+    lastPhAnch := anchAtPiv
+
+if barstate.isconfirmed and not na(pl)
+    int pb = bar_index - pivRIn
+    if pivIn and not na(lastPlBar) and not na(cvdAtPiv) and not na(lastPlCvd) and sdP > 0
+        int  gap    = pb - lastPlBar
+        bool hqSpan = hqRun > bar_index - lastPlBar
+        if gap >= pivMinIn and gap <= pivMaxIn and hqSpan and pl < lastPl and cvdAtPiv >= lastPlCvd + pivMagIn * sdP
+            pivBot := true
+            label.new(pb, pl, "Fundo sem confirmação do fluxo", xloc = xloc.bar_index, yloc = yloc.price, color = evBg(neutCol, true),
+                 style = label.style_label_up, textcolor = evFg(neutCol, true), size = size.tiny, tooltip = pivTip, force_overlay = true)
+            if viewIn != View.hist and not na(fAtPiv) and not na(lastPlF) and (not anchored or anchAtPiv == lastPlAnch)
+                line.new(lastPlBar, lastPlF, pb, fAtPiv, xloc = xloc.bar_index, color = neutCol, style = line.style_dotted, width = 1)
+    lastPl     := pl
+    lastPlCvd  := cvdAtPiv
+    lastPlF    := fAtPiv
+    lastPlBar  := pb
+    lastPlAnch := anchAtPiv
+
+if pivTop or pivBot
+    lastEvTxt  := pivTop ? "Topo sem confirmação do fluxo (pivot)" : "Fundo sem confirmação do fluxo (pivot)"
+    lastEvPinT := false
+    lastEvLow  := false
+    lastEvWeak := false
+    lastEvRes  := ""
+    lastEvTip  := pivTip
+    lastEvBar  := bar_index - pivRIn
+    lastIsAbs  := false
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// 10. VISUAIS
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// Contagem de plots (limite 64; writing_scripts/limitations.md — plot/fill com cor série/bgcolor/alertcondition contam):
+//   2 pares de linhas × [preço 1 + CVD (cor série: esbatido em barras derivadas do preço) 2 + fill (cor série) 1] = 8
+//   + colunas Z (valor + cor série) 2 + cone 2 + preço implícito no gráfico 1 + bgcolor 1 + Data Window 16
+//   + alertcondition 14 = 44 (≤ 64; pior caso, se as cores dependentes de inputs contassem como série: +4 → 48).
+//   hline (zero e ±limiares), label, line e table: 0.
+// Visibilidade por "display" (não por cor na): um plot escondido com display.none não entra na escala do painel.
+bool  showLines = viewIn != View.hist
+bool  showZ     = viewIn != View.lines
+bool  impMode   = modeIn == Mode.imp
+float thr2      = math.max(thr2In, 1.1)
+color pAheadCol = pAheadIn
+color fAheadCol = fAheadIn
+// Linha do preço: com o cinzento por omissão usa a cor do texto do tema (referência visual, distinta dos neutros).
+color pCol      = pColIn == C_PRICE_DEF ? chart.fg_color : pColIn
+// CVD esbatido nas barras de qualidade ≤ baixa: aí o delta é uma cópia do preço, não fluxo medido.
+color fCol      = tier <= 1 ? color.new(fColIn, 70) : fColIn
+
+// Preenchimento entre as pernas: cor pelo Z calibrado (cinzento com gate fechado ou |Z| < 1). Com a calibração ainda
+// fraca (zWeak: < 20 somas K independentes no RMS) a intensidade fica limitada à de abaixo do limiar.
+int   fillMax = zWeak ? 82 : 55
+color fillCol = not gateOn or na(zDiv) ? color.new(neutCol, 92) : math.abs(zDiv) < 1.0 ? color.new(neutCol, 90) :
+     zDiv > 0 ? color.from_gradient(zDiv, 1.0, thr2, color.new(pAheadCol, 90), color.new(pAheadCol, fillMax)) :
+     color.from_gradient(zDiv, -thr2, -1.0, color.new(fAheadCol, fillMax), color.new(fAheadCol, 90))
+
+// Par 1 (unidades-σ e modos visuais): 2 casas decimais. Par 2 (preço implícito): precisão do gráfico (preços).
+// O "precision" do plot() é "input int" (não segue o syminfo.mintick), daí os dois pares; só um se mostra.
+pPlot  = plot(pLine, "Preço (normalizado)", color = pCol, linewidth = pWidthIn, style = plot.style_linebr, precision = 2,
+     display = showLines and not impMode ? display.all : display.none)
+fPlot  = plot(fLine, "CVD (normalizado)", color = fCol, linewidth = fWidthIn, style = plot.style_linebr, precision = 2,
+     display = showLines and not impMode ? display.all : display.none)
+fill(pPlot, fPlot, color = fillCol, title = "Preenchimento da divergência",
+     display = showLines and not impMode ? display.all : display.none)
+pPlotI = plot(pLine, "Preço (modo preço implícito)", color = pCol, linewidth = pWidthIn, style = plot.style_linebr,
+     display = showLines and impMode ? display.all : display.none)
+fPlotI = plot(fLine, "CVD em preço (preço implícito)", color = fCol, linewidth = fWidthIn, style = plot.style_linebr,
+     display = showLines and impMode ? display.all : display.none)
+fill(pPlotI, fPlotI, color = fillCol, title = "Preenchimento da divergência (preço implícito)",
+     display = showLines and impMode ? display.all : display.none)
+
+// Colunas Z (cinzento com gate fechado; cor plena a partir do limiar, se a calibração já não for fraca).
+bool  zFull = math.abs(zDiv) >= thrIn and not zWeak
+color zCol  = not gateOn ? color.new(neutCol, 40) : zDiv >= 0 ? color.new(pAheadCol, zFull ? 0 : 60) :
+     color.new(fAheadCol, zFull ? 0 : 60)
+plot(zDiv, "Z da divergência", color = zCol, style = plot.style_columns, precision = 2,
+     display = showZ ? display.all : display.none)
+// Limiares como hline (preço "input float", display "input plot_simple_display": display.all/none, ambos simples).
+hline(thrIn, "+Limiar |Z|", color = color.new(C_LEVEL, 30), linestyle = hline.style_dashed,
+     display = viewIn != View.lines ? display.all : display.none)
+hline(-thrIn, "−Limiar |Z|", color = color.new(C_LEVEL, 30), linestyle = hline.style_dashed,
+     display = viewIn != View.lines ? display.all : display.none)
+hline(thr2In, "+Limiar forte", color = color.new(C_LEVEL, 50), linestyle = hline.style_dotted,
+     display = viewIn != View.lines ? display.all : display.none)
+hline(-thr2In, "−Limiar forte", color = color.new(C_LEVEL, 50), linestyle = hline.style_dotted,
+     display = viewIn != View.lines ? display.all : display.none)
+// No modo preço implícito o zero esmagaria a escala dos preços (menos na vista só com o histograma Z).
+hline(0, "Zero", color = color.new(C_LEVEL, 50), linestyle = hline.style_dotted,
+     display = modeIn == Mode.imp and viewIn != View.hist ? display.none : display.all)
+
+// Cone nulo iid e preço implícito no gráfico principal.
+plot(coneUp, "Cone nulo +2σ", color = color.new(neutCol, 40), linestyle = plot.linestyle_dotted, precision = 2,
+     display = coneOn and showLines ? display.all : display.none)
+plot(coneDn, "Cone nulo −2σ", color = color.new(neutCol, 40), linestyle = plot.linestyle_dotted, precision = 2,
+     display = coneOn and showLines ? display.all : display.none)
+plot(modeIn == Mode.imp and ovlIn ? fLine : na, "Preço implícito (gráfico principal)", color = fColIn, linewidth = 1,
+     style = plot.style_linebr, force_overlay = true, display = modeIn == Mode.imp and ovlIn ? display.all : display.none)
+
+// Fundo: transições de qualidade (prioritárias; cor não direccional, mais visível quanto mais baixa a nova qualidade)
+// e âncoras.
+bool  tierChg = bar_index > 0 and tier != tierP
+color bgCol   = na
+if bgIn
+    if tierChg
+        bgCol := color.new(C_SEAM, tier >= 3 ? 88 : tier == 2 ? 84 : 80)
+    else if newAnchor and anchored
+        bgCol := color.new(C_ANCHOR, 90)
+bgcolor(bgCol, title = "Âncoras e mudanças de qualidade")
+
+// Data Window (não desenha no painel).
+plot(delta, "Delta (barra)", display = display.data_window, format = format.volume)
+plot(cvdA, "CVD ancorado", display = display.data_window, format = format.volume)
+plot(srP, "σr (bps)", display = display.data_window, precision = 3)
+plot(sdP, "σΔ", display = display.data_window, format = format.volume)
+plot(rhoP, "ρ(r, Δ)", display = display.data_window, precision = 3)
+plot(na(lamOlsP) ? na : lamOlsP * 1000.0, "λ OLS (bps/1000)", display = display.data_window, precision = 4)
+// Na vista «Linhas» o Z não tem colunas: mostra-o também na linha de estado (ambos os ramos são plot_display).
+plot(zDiv, "Z (valor)", display = showZ ? display.data_window : display.data_window + display.status_line, precision = 2)
+plot(pLeg, "Perna do preço (P_K)", display = display.data_window, precision = 2)
+plot(fLeg, "Perna do fluxo (F_K)", display = display.data_window, precision = 2)
+plot(zF, "zF (evento)", display = display.data_window, precision = 2)
+plot(zP, "zP (evento)", display = display.data_window, precision = 2)
+plot(eta, "η (eficiência de impacto)", display = display.data_window, precision = 2)
+plot(tier, "Qualidade (0–3)", display = display.data_window, precision = 0)
+plot(nIntra, "Intrabars", display = display.data_window, precision = 0)
+plot(gateOn ? 1 : 0, "Gate (1 = aberto)", display = display.data_window, precision = 0)
+// Confiança do evento de absorção resolvido nesta barra (para as mensagens dos alertas de resolução).
+plot(resSide != 0 ? (resLowC ? 0 : 1) : na, "Confiança do evento resolvido", display = display.data_window, precision = 0)
+
+// ── Tabela (criada uma vez; preenchida só na última barra). Compacta: 3 linhas, pormenores nas dicas. ──
+string tblPos = switch tblPosIn
+    TblPos.tl => position.top_left
+    TblPos.mr => position.middle_right
+    TblPos.ml => position.middle_left
+    TblPos.br => position.bottom_right
+    TblPos.bl => position.bottom_left
+    =>           position.top_right
+string tblSize = switch tblSizeIn
+    TblSize.tiny   => size.tiny
+    TblSize.normal => size.normal
+    =>                size.small
+bool tblFull = tblModeIn == TblMode.full
+
+// Compacta: uma só coluna com linhas auto-descritivas (sem a coluna dos rótulos: ocupa menos do canto do painel).
+var table tbl = table.new(tblPos, tblFull ? 2 : 1, tblFull ? 9 : 3, bgcolor = color.new(chart.bg_color, 8),
+     frame_color = color.new(chart.fg_color, 70), frame_width = 1, border_color = color.new(chart.fg_color, 88), border_width = 1)
+
+if tblIn and barstate.islast
+    color fg  = chart.fg_color
+    color mut = color.new(chart.fg_color, 50)
+    int   vc  = tblFull ? 1 : 0                      // coluna dos valores
+    // Intrabars por barra: o aviso é relativo ao máximo possível (5 em 5 min com 1 min, onde "< 5" seria ruído); em
+    // ticks, ou com ≥ 10 possíveis, vale a regra "< 5 por barra".
+    float avgIntra = nLtfBars > 0 ? nIntraSum / nLtfBars : na
+    float covPct   = nBars > 0 ? 100.0 * nCovBars / nBars : na
+    float expIntra = ltfTick or ltfSec <= 0 ? na : tfSec / ltfSec
+    bool  fewIntra = not na(avgIntra) and (na(expIntra) or expIntra >= 10 ? avgIntra < 5 : avgIntra < 0.6 * expIntra)
+    string covTxt  = srcIn == DeltaSrc.bar ? "— (não usado)" : (na(avgIntra) ? "—" : str.tostring(avgIntra, "0.0")) +
+         (na(expIntra) or srcIn == DeltaSrc.bar ? "" : " de " + str.tostring(expIntra, "#") + " possíveis") + " · " +
+         str.tostring(covPct, "0") + "% das barras" + (fewIntra ? " ⚠" : "")
+    string covTip  = "Média de intrabars por barra e % das barras com intrabars ou footprint. Com poucos intrabars " +
+         "por barra (menos de 5, ou menos de 60% dos possíveis), o delta degrada-se."
+    // Tipo de volume: aviso só para volume de ticks (declarado, ou FX à vista); "n/a" é o normal fora de cripto.
+    string vt      = syminfo.volumetype
+    string vtTxt   = volTypeName(vt) + (syminfo.type == "forex" and vt != "tick" ? " · FX: provável volume de ticks" : "")
+    string vtTip   = tickLike ? "Volume de ticks: conta negócios ou, em FX à vista e CFD, actualizações de cotação, não " +
+         "quantidades; não há lado agressor e o delta é derivado do preço: qualidade baixa, só as linhas (sem Z nem eventos)." :
+         vt == "base" or vt == "quote" ? "Volume qualificado pelo fornecedor." : "O fornecedor não qualifica o volume (habitual " +
+         "fora de cripto): em acções e futuros costuma ser o volume real (acções/contratos); confirme que não é volume de ticks."
+    float  zFis    = atanhF(nz(rhoP))
+    float  seF     = 1.0 / math.sqrt(nIn - 3)
+    string rhoTxt  = na(rhoP) ? "—" : f2(rhoP) + " [" + f2(tanhF(zFis - 1.96 * seF)) + ", " + f2(tanhF(zFis + 1.96 * seF)) +
+         "] · N = " + str.tostring(nIn) + " · gate ≥ " + f2(rhoMin)
+    // λ em bps por 1, 10³, 10⁶, … unidades de volume, escolhida para o λσ (≥ λ OLS) ficar ≥ 0.1.
+    int    lamK    = lamExp(lamSigP)
+    float  lamMul  = math.pow(1000.0, lamK)
+    string lamUnit = lamK == 0 ? "1 unidade" : lamK == 1 ? "mil unidades" : lamK == 2 ? "1 milhão de unidades" :
+         lamK == 3 ? "10⁹ unidades" : "10¹² unidades"
+    string lamTxt  = "R² " + f2(na(rhoP) ? na : rhoP * rhoP) + " · λ OLS " + fsig(lamOlsP * lamMul) + " · λσ " +
+         fsig(lamSigP * lamMul) + " bps por " + lamUnit + " · η " + f2(eta)
+    // NAR em %: desde a âncora (varia muito de dia para dia) e de todo o histórico de qualidade ≥ média (persistente).
+    string narHTxt = fpct(narHist) + " em " + str.tostring(hqBars) + " barras de qualidade ≥ média"
+    string narTxt  = fpct(nar) + " · âncora " + anchName + "\nhistórico " + narHTxt
+    string noteTxt = "Divergência ≠ previsão; o preço resolve."
+    // Avisos (visíveis também na versão compacta): primeiro na célula da fonte, com as razões no início da dica.
+    string warnTxt = ""
+    string warnTip = ""
+    if anchWarn
+        warnTxt += "âncora inválida → Auto"
+        warnTip += "Âncora manual inválida para este timeframe: usa-se a Auto.\n"
+    if fewIntra
+        warnTxt += (warnTxt == "" ? "" : " · ") + "poucos intrabars"
+        warnTip += "Poucos intrabars por barra (" + covTxt + "): o delta degrada-se.\n"
+    if tickLike
+        warnTxt += (warnTxt == "" ? "" : " · ") + "volume de ticks"
+        warnTip += vtTip + "\n"
+    if narWarn
+        warnTxt += (warnTxt == "" ? "" : " · ") + "desequilíbrio persistente"
+        warnTip += "NAR de todo o histórico " + narHTxt + ": um desequilíbrio persistente de agressores desloca o Z " +
+             "para um dos lados. Considere ligar «Remover deriva do fluxo».\n"
+    // Fonte, qualidade e avisos (linhas curtas: a tabela fica no canto do painel sobre as barras recentes); na versão
+    // compacta a âncora vai para a dica (só aparece na célula quando é inválida, como aviso).
+    string srcCell = srcTxt + " · " + tierShort(tier) + (tblFull ? "\nâncora " + anchName : "") + (warnTxt == "" ? "" : "\n⚠ " + warnTxt)
+    if tblFull
+        tbl.cell(0, 0, "Fonte · qualidade", text_color = fg, text_size = tblSize, text_halign = text.align_left)
+    tbl.cell(vc, 0, srcCell, text_color = tier <= 1 or warnTxt != "" ? C_WARN : fg, text_size = tblSize,
+         text_halign = text.align_left, tooltip = warnTip + "Qualidade: " + tierName(tier) + "\nIntrabars por barra · " +
+         "cobertura: " + covTxt + "\nTipo de volume: " + vtTxt + "\nNAR desde a âncora " + anchName + ": " + fpct(nar) +
+         "\nNAR do histórico: " + narHTxt + "\n" + covTip)
+    // Z e estado (texto na cor do tema; o fundo da célula leva a cor do Z quando |Z| ≥ limiar). Na barra em curso o
+    // Z e o estado ainda podem mudar: alertas e eventos só usam barras fechadas.
+    int    rZ      = tblFull ? 4 : 1
+    color  zCellBg = not gateOn or na(zDiv) ? na : zDiv >= thrIn ? color.new(pAheadCol, 75) : zDiv <= -thrIn ? color.new(fAheadCol, 75) : na
+    string calLbl  = calProv and nCalD > 0 ? (tblFull ? " · cal. provisória " : " · cal. ") + str.tostring(nCalD) + "/" +
+         str.tostring(mIn) : ""
+    string zLine1  = (tblFull ? "" : "Z ") + fs2(zDiv) + calLbl + (barstate.isconfirmed ? "" : " · barra em curso")
+    string zAlTip  = nCalD < 2 * nIn and not na(zDiv) ? "\nAlertas de Z só com ≥ " + str.tostring(2 * nIn) + " valores de " +
+         "calibração (agora " + str.tostring(nCalD) + ")." : ""
+    if tblFull
+        tbl.cell(0, rZ, "Z (K = " + str.tostring(kIn) + ") · estado", text_color = fg, text_size = tblSize, text_halign = text.align_left)
+    tbl.cell(vc, rZ, zLine1 + "\n" + stateShort, text_color = gateOn and not na(zDiv) ? fg : mut, bgcolor = zCellBg,
+         text_size = tblSize, text_halign = text.align_left, tooltip = (stateTip == "" ? "" : stateTip + "\n") +
+         (barstate.isconfirmed ? "" : "Barra em curso: Z e estado provisórios até ao fecho; alertas e eventos só em barras fechadas.\n") +
+         "Z (K = " + str.tostring(kIn) + ") · ρ(r, Δ) [IC 95%]: " + rhoTxt + "\n" + lamTxt + "\n" + noteTxt +
+         " Z > 0: preço à frente do fluxo; Z < 0: fluxo à frente do preço." + zAlTip)
+    // Último evento: texto base + etiquetas (preço travado, confiança) na 1.ª linha; idade e resolução na 2.ª
+    int    rEv    = tblFull ? 5 : 2
+    int    evN    = na(lastEvBar) ? 0 : bar_index - lastEvBar
+    string evAge  = evN == 0 ? "nesta barra" : evN == 1 ? "há 1 barra" : "há " + str.tostring(evN) + " barras"
+    string evHead = lastEvTxt + (lastEvPinT ? " · preço travado" : "") + (lastEvLow ? " (baixa conf.)" : lastEvWeak ? " (cal. prov.)" : "")
+    string evCell = na(lastEvBar) ? (tblFull ? "—" : "Sem eventos") : evHead + "\n" + evAge + (lastEvRes == "" ? "" : " " + lastEvRes)
+    if tblFull
+        tbl.cell(0, rEv, "Último evento", text_color = fg, text_size = tblSize, text_halign = text.align_left)
+    tbl.cell(vc, rEv, evCell, text_color = fg, text_size = tblSize, text_halign = text.align_left,
+         tooltip = lastEvTip == "" ? "Sem eventos." : lastEvTip)
+    if tblFull
+        // Intrabars por barra e cobertura
+        tbl.cell(0, 1, "Intrabars/barra · cobertura", text_color = fg, text_size = tblSize, text_halign = text.align_left)
+        tbl.cell(1, 1, covTxt, text_color = fewIntra ? C_WARN : fg, text_size = tblSize, text_halign = text.align_left, tooltip = covTip)
+        // ρ com IC de Fisher a 95%
+        tbl.cell(0, 2, "ρ(r, Δ) [IC 95%]", text_color = fg, text_size = tblSize, text_halign = text.align_left)
+        tbl.cell(1, 2, rhoTxt, text_color = gateOn ? fg : mut, text_size = tblSize, text_halign = text.align_left,
+             tooltip = "Correlação dos incrementos (retorno da barra r vs delta da barra Δ), nunca dos níveis. Cinzento = gate fechado.")
+        // R², λ e η
+        tbl.cell(0, 3, "R² · λ · η", text_color = fg, text_size = tblSize, text_halign = text.align_left)
+        tbl.cell(1, 3, lamTxt, text_color = gateOn ? fg : mut, text_size = tblSize, text_halign = text.align_left,
+             tooltip = "λ OLS = ρ·σr/σΔ e λσ = σr/σΔ, em bps por unidade de volume do símbolo (activo base, moeda de " +
+             "cotação, contratos ou acções), na escala indicada. η = eficiência de impacto na janela do evento (só " +
+             "contexto: o impacto é côncavo).")
+        // NAR desde a âncora
+        tbl.cell(0, 6, "NAR (agressão líquida)", text_color = fg, text_size = tblSize, text_halign = text.align_left)
+        tbl.cell(1, 6, narTxt, text_color = anchWarn or narWarn ? C_WARN : fg, text_size = tblSize, text_halign = text.align_left,
+             tooltip = "Rácio de agressão líquida (NAR) = CVD / volume, em % (−100% a +100%): desde a âncora e em todo o " +
+             "histórico de qualidade ≥ média. O NAR desde a âncora varia muito de dia para dia; um desequilíbrio " +
+             "persistente vê-se no do histórico (aviso a partir de 3%, com «Remover deriva do fluxo» desligado)." +
+             (anchWarn ? "\nÂncora manual inválida para este timeframe: usa-se a Auto." : ""))
+        // Tipo de volume
+        tbl.cell(0, 7, "Tipo de volume", text_color = fg, text_size = tblSize, text_halign = text.align_left)
+        tbl.cell(1, 7, vtTxt + (tickLike ? " ⚠" : ""), text_color = tickLike ? C_WARN : fg, text_size = tblSize,
+             text_halign = text.align_left, tooltip = vtTip)
+        // Nota de evidência (sem merge_cells: a tabela é reescrita em cada tick do tempo real)
+        tbl.cell(0, 8, "Nota", text_color = mut, text_size = tblSize, text_halign = text.align_left)
+        tbl.cell(1, 8, noteTxt, text_color = mut, text_size = tblSize, text_halign = text.align_left,
+             tooltip = "Z é um medidor descritivo calibrado, não uma previsão: em dados reais não houve efeito robusto nos " +
+             "retornos seguintes. Os eventos são neutros até o preço os resolver.")
+
+// Guarda: sem volume nenhum não há delta.
+if barstate.islast and cumVol == 0
+    runtime.error("Sem dados de volume para este símbolo.")
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// 11. ALERTAS (só em barras confirmadas; primeira barra de cada aglomerado)
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+bool zUp     = gateOn and not na(zDiv) and zDiv >= thrIn
+bool zDn     = gateOn and not na(zDiv) and zDiv <= -thrIn
+// Alertas de Z com histerese (agrupamento): disparam no 1.º cruzamento e só voltam a armar depois de o Z regressar a
+// menos de limiar − 1 do mesmo lado. A soma K sobreposta (ACF lag-1 ≈ 0.95) oscila em torno do limiar e o gate pisca
+// perto de ρ mínimo: sem histerese o mesmo episódio repetia o alerta poucas barras depois.
+// Só com ≥ 2N valores de calibração (aquecimento de 2N do dossier §6.3): antes disso, em dados reais, |Z| passa o
+// limiar ~1.2–1.5× mais vezes. Um cruzamento nessa fase desarma na mesma (o alerta não sai atrasado, a meio do episódio).
+bool zCalOk  = nCalD >= 2 * nIn
+var bool upArmed = true
+var bool dnArmed = true
+bool crossUp = barstate.isconfirmed and zUp and upArmed
+bool crossDn = barstate.isconfirmed and zDn and dnArmed
+bool alZUp   = crossUp and zCalOk
+bool alZDn   = crossDn and zCalOk
+if crossUp
+    upArmed := false
+if crossDn
+    dnArmed := false
+if not na(zDiv) and zDiv < thrIn - 1.0
+    upArmed := true
+if not na(zDiv) and zDiv > -(thrIn - 1.0)
+    dnArmed := true
+// Eventos com calibração fraca do zF/zP (rótulo oco «cal. prov.») não alertam, nem a sua resolução.
+bool alAbs   = newAbs and not evWeak
+bool alPinO  = newPin and not newAbs and not evWeak  // travado dentro da absorção em curso (sem novo evento)
+bool alPwf   = newPwf and not evWeak
+bool alRes   = (resCont or resHeld) and not resWeak
+bool alAbsB  = alAbs and sF > 0
+bool alAbsS  = alAbs and sF < 0
+bool alPinB  = newPin and not evWeak and sF > 0      // preço travado: primeira barra do seu próprio aglomerado
+bool alPinS  = newPin and not evWeak and sF < 0
+bool alResCB = alRes and resCont and resSide > 0
+bool alResCS = alRes and resCont and resSide < 0
+bool alResHB = alRes and resHeld and resSide > 0
+bool alResHS = alRes and resHeld and resSide < 0
+bool alPwfU  = alPwf and sP > 0
+bool alPwfD  = alPwf and sP < 0
+
+// Valores e qualidade nas mensagens (placeholders {{plot("título")}}, visuals/plots.md): qualidade 2 = baixa confiança.
+const string AL_Z = ' · Z = {{plot("Z (valor)")}} · qualidade {{plot("Qualidade (0–3)")}} (3 alta, 2 média)'
+const string AL_E = ' · zF = {{plot("zF (evento)")}} · zP = {{plot("zP (evento)")}} · qualidade {{plot("Qualidade (0–3)")}} ' +
+     '(3 alta, 2 média = baixa confiança)'
+// Resoluções: a confiança é a do EVENTO resolvido (não a da barra actual). Evidência direccional fraca e não validada.
+const string AL_R = ' Confiança do evento: {{plot("Confiança do evento resolvido")}} (1 normal, 0 baixa). Contexto, não previsão.'
+alertcondition(alZUp, "Z ≥ +limiar (preço à frente do fluxo)",
+     "{{ticker}} {{interval}}: Z ≥ +limiar — preço à frente do fluxo: nas últimas K barras o preço subiu mais (ou caiu " +
+     "menos) do que o fluxo implica (gate aberto; não é um sinal de alta)." + AL_Z)
+alertcondition(alZDn, "Z ≤ −limiar (fluxo à frente do preço)",
+     "{{ticker}} {{interval}}: Z ≤ −limiar — fluxo à frente do preço: nas últimas K barras o preço subiu menos (ou caiu " +
+     "mais) do que o fluxo implica (gate aberto; não é um sinal de baixa)." + AL_Z)
+alertcondition(alAbsB, "Fluxo comprador absorvido",
+     "{{ticker}} {{interval}}: fluxo comprador absorvido (por resolver; o preço decide)." + AL_E)
+alertcondition(alAbsS, "Fluxo vendedor absorvido",
+     "{{ticker}} {{interval}}: fluxo vendedor absorvido (por resolver; o preço decide)." + AL_E)
+alertcondition(alPinB, "Preço travado sob compras extremas",
+     "{{ticker}} {{interval}}: preço travado sob fluxo comprador extremo — vigiar a quebra do intervalo (em qualquer sentido)." + AL_E)
+alertcondition(alPinS, "Preço travado sob vendas extremas",
+     "{{ticker}} {{interval}}: preço travado sob fluxo vendedor extremo — vigiar a quebra do intervalo (em qualquer sentido)." + AL_E)
+alertcondition(alResCB, "Compras absorvidas → continuação (alta)",
+     "{{ticker}} {{interval}}: a absorção de compras falhou — fecho acima do máximo do evento (continuação em alta)." + AL_R)
+alertcondition(alResCS, "Vendas absorvidas → continuação (baixa)",
+     "{{ticker}} {{interval}}: a absorção de vendas falhou — fecho abaixo do mínimo do evento (continuação em baixa)." + AL_R)
+alertcondition(alResHB, "Compras absorvidas → segurou (baixa)",
+     "{{ticker}} {{interval}}: a absorção de compras segurou — o lado passivo venceu (fecho abaixo do mínimo do evento)." + AL_R)
+alertcondition(alResHS, "Vendas absorvidas → segurou (alta)",
+     "{{ticker}} {{interval}}: a absorção de vendas segurou — o lado passivo venceu (fecho acima do máximo do evento)." + AL_R)
+alertcondition(alPwfU, "Preço sem fluxo (subida)", "{{ticker}} {{interval}}: preço a subir sem fluxo comprador." + AL_E)
+alertcondition(alPwfD, "Preço sem fluxo (queda)", "{{ticker}} {{interval}}: preço a cair sem fluxo vendedor." + AL_E)
+alertcondition(pivTop, "Divergência por pivots (topo)", "{{ticker}} {{interval}}: topo sem confirmação do fluxo (pivot confirmado).")
+alertcondition(pivBot, "Divergência por pivots (fundo)", "{{ticker}} {{interval}}: fundo sem confirmação do fluxo (pivot confirmado).")
+
+// Um único alert() dinâmico para qualquer novo evento, resolução ou cruzamento (com as mesmas regras das
+// alertcondition: calibração fraca não alerta). Uma expiração sozinha não alerta (não é uma resolução; com vida de 1
+// barra duplicaria cada evento); se coincidir com outro alerta, é mencionada. Números com hífen ASCII (fa2) e o
+// símbolo com o prefixo da bolsa (o mesmo par em várias bolsas distingue-se).
+bool resMsg = (resCont or resHeld or resExp) and not resWeak
+if barstate.isconfirmed and (alZUp or alZDn or alAbs or alPinO or alPwf or alRes or pivTop or pivBot)
+    string evMsg = alZUp ? "Z ≥ +limiar: " + stateTxt + calTxt : alZDn ? "Z ≤ −limiar: " + stateTxt + calTxt : ""
+    if alAbs
+        evMsg := evMsg + (evMsg == "" ? "" : " | ") + (sF > 0 ? "fluxo comprador absorvido" : "fluxo vendedor absorvido") +
+             (pinned ? " (preço travado)" : "") + (lowConf ? " (baixa confiança)" : "")
+    if alPinO
+        evMsg := evMsg + (evMsg == "" ? "" : " | ") + "preço travado sob fluxo " + (sF > 0 ? "comprador" : "vendedor") +
+             " extremo (dentro da absorção em curso)"
+    if alPwf
+        evMsg := evMsg + (evMsg == "" ? "" : " | ") + (sP > 0 ? "preço a subir sem fluxo comprador" : "preço a cair sem fluxo vendedor") +
+             (lowConf ? " (baixa confiança)" : "")
+    if resMsg
+        evMsg := evMsg + (evMsg == "" ? "" : " | ") + "absorção de " + (resSide > 0 ? "compras " : "vendas ") + resTxt +
+             (resLowC ? " (evento de baixa confiança)" : "")
+    if pivTop or pivBot
+        evMsg := evMsg + (evMsg == "" ? "" : " | ") + (pivTop ? "topo sem confirmação do fluxo" : "fundo sem confirmação do fluxo")
+    alert(str.format("{0}:{1} {2} · {3}: {4} · Z = {5} · zF = {6} · zP = {7} · ρ = {8} · fonte: {9} · qualidade {10}{11}",
+         syminfo.prefix, syminfo.ticker, tfName(timeframe.period), str.tostring(close, format.mintick), evMsg, fa2(zDiv),
+         fa2(zF), fa2(zP), fa2(rhoP), srcTxt, tierName(tier), tfSec >= 3600 ? " · " + NOTE_HTF : ""),
+         alert.freq_once_per_bar_close)

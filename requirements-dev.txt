@@ -1,0 +1,2 @@
+# Dependências de desenvolvimento (testes). O teste T2 usa o parser pynescript para validar a sintaxe Pine.
+pynescript==0.3.0

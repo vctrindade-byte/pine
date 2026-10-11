@@ -1,0 +1,18 @@
+{
+  "name": "price-cvd-normalizer-tests",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Harness de verificação (PineTS) do indicador Pine v6 \"Preço × CVD Normalizado [Order Flow]\".",
+  "type": "module",
+  "scripts": {
+    "test": "node tests/run_tests.mjs",
+    "test:quick": "node tests/run_tests.mjs --quick",
+    "test:standin": "node tests/run_tests.mjs --target standin"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "pinets": "0.11.0"
+  }
+}

@@ -1,0 +1,325 @@
+//@version=6
+// Stand-in de TESTES — NÃO é o indicador. Imita as construções-chave de spec.md (enums, linha LTF única,
+// estado var, ta.stdev/correlation, math.sum, timeframe.change, labels, tabela, fill, alertcondition) para
+// validar o harness (tests/run_tests.mjs) enquanto o indicador real é escrito em paralelo.
+// A estatística Z segue spec §5 (C1, clip ±c, RMS não-centrado dos valores ANTERIORES, gate ρ).
+indicator("Preço × CVD Normalizado [stand-in de testes]", shorttitle = "P×CVD stand-in", overlay = false, format = format.price, precision = 2, explicit_plot_zorder = true, max_labels_count = 500, max_lines_count = 500)
+
+// ───────────────────────────── Inputs ─────────────────────────────
+enum DeltaSrc
+    ltf = "Intrabar (timeframe inferior)"
+    bar = "Só barras do gráfico (derivado do preço)"
+
+enum Precision
+    auto   = "Auto (paridade com o CVD da TradingView)"
+    s1     = "1S (segundos · Premium+)"
+    m1     = "1 minuto"
+    custom = "Personalizado"
+
+enum Classifier
+    candle = "Regra da vela (paridade TradingView)"
+    bvc    = "BVC-Normal por intrabar"
+
+enum Mode
+    sig  = "Unidades-σ ancoradas"
+    imp  = "Preço implícito pelo fluxo (λ)"
+    roll = "Unidades-σ em janela móvel"
+    lz   = "Z-score de níveis (só visual)"
+    mm   = "Min–máx (só visual)"
+
+enum Anchor
+    auto = "Auto"
+    rth  = "Sessão regular (RTH)"
+    d1   = "Diária"
+    w1   = "Semanal"
+    mo1  = "Mensal"
+
+enum Impact
+    vm  = "λσ = σr/σΔ (vol-matched)"
+    ols = "λ OLS = ρ·σr/σΔ"
+
+enum View
+    lines = "Linhas"
+    hist  = "Histograma Z"
+    both  = "Linhas + Z"
+
+const string G1 = "Dados de delta"
+const string G2 = "Normalização e visualização"
+const string G3 = "Estatística"
+const string G4 = "Eventos"
+
+DeltaSrc   srcIn     = input.enum(DeltaSrc.ltf, "Fonte do delta", group = G1, tooltip = "Fonte do delta por barra.")
+Precision  precIn    = input.enum(Precision.auto, "Precisão intrabar", group = G1, tooltip = "Timeframe inferior.", active = srcIn != DeltaSrc.bar)
+string     ltfCustIn = input.timeframe("1", "Timeframe personalizado", group = G1, tooltip = "Usado em Personalizado.", active = precIn == Precision.custom)
+Classifier clsIn     = input.enum(Classifier.candle, "Classificador intrabar", group = G1, tooltip = "Regra da vela ou BVC.")
+Mode       modeIn    = input.enum(Mode.sig, "Modo", group = G2, tooltip = "Normalização das linhas.")
+Anchor     anchIn    = input.enum(Anchor.auto, "Âncora", group = G2, tooltip = "Reinício das linhas ancoradas.")
+int        wIn       = input.int(100, "Janela W", minval = 10, maxval = 1000, group = G2, tooltip = "Modos em janela.")
+Impact     lamIn     = input.enum(Impact.vm, "Escala de impacto λ", group = G2, tooltip = "Só no modo preço implícito.")
+View       viewIn    = input.enum(View.lines, "Visualização", group = G2, tooltip = "Linhas, histograma Z ou ambos.")
+int        nIn       = input.int(100, "Janela σ/ρ (N)", minval = 30, maxval = 300, group = G3, tooltip = "Janela de σ e ρ.")
+int        kIn       = input.int(20, "Horizonte da divergência (K)", minval = 5, maxval = 50, group = G3, tooltip = "Soma de K barras.")
+int        mIn       = input.int(1000, "Janela de calibração (M)", minval = 300, maxval = 2000, group = G3, tooltip = "RMS dos M valores anteriores.")
+float      clipIn    = input.float(4.0, "Winsorizar unidades-σ em ±", minval = 2.0, maxval = 10.0, group = G3, tooltip = "Corte das unidades-σ.")
+float      thrIn     = input.float(2.0, "Limiar |Z|", group = G3, tooltip = "Divergência.")
+float      thr2In    = input.float(3.0, "Limiar forte |Z|", group = G3, tooltip = "Divergência forte.")
+float      rhoMinIn  = input.float(0.30, "ρ mínimo (gate)", minval = 0.0, maxval = 0.9, group = G3, tooltip = "Gate de validade.")
+bool       evIn      = input.bool(true, "Eventos de absorção", group = G4, tooltip = "Etiquetas de absorção.")
+bool       pwfIn     = input.bool(true, "Eventos de preço sem fluxo", group = G4, tooltip = "Etiquetas de preço sem fluxo.")
+int        evWinIn   = input.int(15, "Janela do evento (min)", minval = 1, group = G4, tooltip = "Janela curta.")
+float      zfIn      = input.float(2.0, "|zF| forte", group = G4, tooltip = "Limiar do fluxo.")
+bool       lowConfIn = input.bool(true, "Mostrar com dados de 1 minuto (baixa confiança)", group = G4, tooltip = "Tier 2.")
+bool       tblIn     = input.bool(true, "Mostrar tabela", group = "Tabela", tooltip = "Tabela de estado.")
+
+// ───────────────────────────── Funções ─────────────────────────────
+clip(float x, float c) =>
+    math.max(-c, math.min(c, x))
+
+tanh(float y) =>
+    float e = math.exp(2.0 * math.max(-20.0, math.min(20.0, y)))
+    (e - 1.0) / (e + 1.0)
+
+// Φ por Abramowitz–Stegun 7.1.26.
+normCdf(float z) =>
+    float x = math.abs(z) / math.sqrt(2.0)
+    float t = 1.0 / (1.0 + 0.3275911 * x)
+    float e = 1.0 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * math.exp(-x * x)
+    0.5 * (1.0 + math.sign(z) * e)
+
+// RMS não-centrado dos valores ANTERIORES (o valor actual nunca entra no denominador).
+rmsLag(float x, int m, int warm) =>
+    float x2 = x * x
+    float s = ta.sma(x2, m)
+    var float cum = 0.0
+    var int cnt = 0
+    float out = cnt > m ? math.sqrt(s[1]) : cnt >= warm ? math.sqrt(cum / cnt) : na
+    if not na(x2)
+        cum += x2
+        cnt += 1
+    out
+
+ltfSigned(int sigLen) =>
+    // regra da vela com lado transportado (spec §4.1); sem regra de cotações bid/ask no stand-in
+    var int dir = 1
+    float cPrev = close[1]
+    int pDir = close > open ? 1 : close < open ? -1 : close > cPrev ? 1 : close < cPrev ? -1 : 0
+    dir := pDir != 0 ? pDir : dir
+    float v = nz(volume)
+    float dp = session.isfirstbar or na(cPrev) ? close - open : close - cPrev
+    float sg = ta.stdev(dp, sigLen)
+    float z = sg > 0 ? math.max(-10.0, math.min(10.0, dp / sg)) : 0.0
+    [dir * v, v * (2.0 * normCdf(z) - 1.0), v]
+
+// ───────────────────────────── Motor de delta ─────────────────────────────
+string ltf = switch precIn
+    Precision.s1     => "1S"
+    Precision.m1     => "1"
+    Precision.custom => ltfCustIn
+    =>                  timeframe.isseconds ? "1S" : timeframe.isintraday ? "1" : timeframe.isdaily ? "5" : "60"
+
+[aCand, aBvc, aVol] = request.security_lower_tf(syminfo.tickerid, ltf, ltfSigned(100), ignore_invalid_timeframe = true)
+int   nIntra   = na(aVol) ? 0 : aVol.size()
+float ltfDelta = nIntra > 0 ? (clsIn == Classifier.candle ? aCand.sum() : aBvc.sum()) : na
+float ltfVol   = nIntra > 0 ? aVol.sum() : na
+
+int tfSec = timeframe.in_seconds()
+int ltfSec = str.endswith(ltf, "T") ? 0 : timeframe.in_seconds(ltf)
+int cfgTier = not str.endswith(ltf, "T") and ltfSec >= tfSec ? 1 : str.endswith(ltf, "T") or str.endswith(ltf, "S") ? 3 : 2
+
+// Fallback BVC na barra (derivado do preço); rBar em bps com guarda de gaps.
+float rRaw  = 1e4 * math.log(close / close[1])
+float sRaw  = ta.stdev(rRaw, 100)
+float sRawP = sRaw[1]
+bool  gapBar = na(close[1]) or session.isfirstbar or math.abs(1e4 * math.log(open / close[1])) > 3.0 * nz(sRawP, 1e10)
+float rBar  = gapBar ? 1e4 * math.log(close / open) : rRaw
+float sBar  = ta.stdev(rBar, 100)
+float sBarP = sBar[1]
+float zBar  = sBarP > 0 ? clip(rBar / sBarP, 10.0) : 0.0
+float barDelta = nz(volume) * (2.0 * normCdf(zBar) - 1.0)
+
+bool useLtf = srcIn == DeltaSrc.ltf and nIntra > 0
+float delta  = useLtf ? ltfDelta : barDelta
+float barVol = useLtf ? ltfVol : nz(volume)
+var int tier = 1
+tier := nz(volume) == 0 ? tier : useLtf ? cfgTier : 1
+var int hqRun = 0
+hqRun := tier >= 2 ? hqRun + 1 : 0
+
+// ───────────────────────────── Estatística (spec §5) ─────────────────────────────
+float d    = delta
+float r    = na(d) ? na : rBar
+float sr   = ta.stdev(r, nIn)
+float sd   = ta.stdev(d, nIn)
+float rho  = ta.correlation(r, d, nIn)
+float srP  = sr[1]
+float sdP  = sd[1]
+float rhoP = rho[1]
+float ur   = srP > 0 ? clip(r / srP, clipIn) : na
+float ud   = sdP > 0 ? clip(d / sdP, clipIn) : na
+// hqOk (spec revista): as janelas σ/ρ de todos os termos das somas K e ke inteiras em barras de tier ≥ 2.
+int   keHq = math.min(math.max(1, math.round(evWinIn * 60 / tfSec)), math.max(1, math.floor(mIn / 20.0)))
+bool  hqOk = tier >= 2 and hqRun >= nIn + math.max(kIn, keHq)
+float sumU = math.sum(ur - ud, kIn)
+float sumP = math.sum(ur, kIn)
+float sumF = math.sum(ud, kIn)
+float Draw = hqOk ? sumU / math.sqrt(2.0 * kIn * (1.0 - math.min(nz(rhoP), 0.95))) : na
+float rmsD = rmsLag(Draw, mIn, nIn)
+float Z    = rmsD > 0 ? Draw / rmsD : na
+float rhoMin = math.max(rhoMinIn, tanh(1.96 / math.sqrt(nIn - 3)))
+bool  gateOn = hqOk and not na(rhoP) and rhoP >= rhoMin
+float pLeg = hqOk ? sumP / math.sqrt(kIn) : na
+float fLeg = hqOk ? sumF / math.sqrt(kIn) : na
+float lamOlsP = sdP > 0 ? nz(rhoP) * srP / sdP : na
+
+// ───────────────────────────── Âncora e linhas (spec §6) ─────────────────────────────
+string autoTf = tfSec <= 3600 ? "1D" : tfSec < 86400 ? "1W" : tfSec < 604800 ? "1M" : "12M"
+string anchTf = switch anchIn
+    Anchor.d1  => "1D"
+    Anchor.w1  => "1W"
+    Anchor.mo1 => "1M"
+    =>            autoTf
+bool  anchOk  = timeframe.in_seconds(anchTf) > tfSec
+string anchUse = anchOk ? anchTf : autoTf
+bool  tfChg   = timeframe.change(anchUse)
+bool  rth1st  = session.isfirstbar_regular
+
+var float lnA  = na
+var float cvdA = 0.0
+var float volA = 0.0
+var float srA  = na
+var float sdA  = na
+var float rhoA = na
+var int anchorId = 0
+var float cvdC = 0.0
+bool newAnchor = na(lnA) or (anchIn == Anchor.rth ? rth1st : tfChg)
+if newAnchor
+    lnA := math.log(open)
+    cvdA := 0.0
+    volA := 0.0
+    srA := srP
+    sdA := sdP
+    rhoA := rhoP
+    anchorId += 1
+else if not (srA > 0) or not (sdA > 0)
+    // repete enquanto σ congelado for na OU 0 (ex.: delta BVC nulo nas primeiras barras sem σ_bar)
+    srA := srP
+    sdA := sdP
+    rhoA := rhoP
+cvdA += nz(d)
+volA += nz(barVol)
+cvdC += nz(d)
+
+float lnC   = math.log(close)
+float lnCW  = lnC[wIn]
+float cvdCW = cvdC[wIn]
+float smaP  = ta.sma(lnC, wIn)
+float sdLP  = ta.stdev(lnC, wIn)
+float smaF  = ta.sma(cvdC, wIn)
+float sdLF  = ta.stdev(cvdC, wIn)
+float hiP   = ta.highest(close, wIn)
+float loP   = ta.lowest(close, wIn)
+float hiF   = ta.highest(cvdC, wIn)
+float loF   = ta.lowest(cvdC, wIn)
+float lamA  = sdA > 0 ? (lamIn == Impact.ols ? nz(rhoA) : 1.0) * srA / sdA : na
+
+float pLine = na
+float fLine = na
+switch modeIn
+    Mode.sig =>
+        pLine := srA > 0 ? 1e4 * (lnC - lnA) / srA : na
+        fLine := sdA > 0 ? cvdA / sdA : na
+    Mode.imp =>
+        pLine := close
+        fLine := na(lamA) ? na : math.exp(lnA + lamA * cvdA / 1e4)
+    Mode.roll =>
+        pLine := srP > 0 ? 1e4 * (lnC - lnCW) / srP : na
+        fLine := sdP > 0 ? (cvdC - cvdCW) / sdP : na
+    Mode.lz =>
+        pLine := sdLP > 0 ? (lnC - smaP) / sdLP : na
+        fLine := sdLF > 0 ? (cvdC - smaF) / sdLF : na
+    Mode.mm =>
+        pLine := hiP - loP > 0 ? 100.0 * (2.0 * (close - loP) / (hiP - loP) - 1.0) : na
+        fLine := hiF - loF > 0 ? 100.0 * (2.0 * (cvdC - loF) / (hiF - loF) - 1.0) : na
+if na(d)
+    pLine := na
+    fLine := na
+
+// ───────────────────────────── Eventos (spec §7, simplificado) ─────────────────────────────
+int   ke   = math.max(1, math.round(evWinIn * 60 / tfSec))
+float fEs  = math.sum(ud, ke)
+float pEs  = math.sum(ur, ke)
+float fE   = hqOk ? fEs / math.sqrt(ke) : na
+float pE   = hqOk ? pEs / math.sqrt(ke) : na
+float rF   = rmsLag(fE, mIn, nIn)
+float rP   = rmsLag(pE, mIn, nIn)
+float zF   = rF > 0 ? fE / rF : na
+float zP   = rP > 0 ? pE / rP : na
+float sF   = math.sign(nz(zF))
+float sP   = math.sign(nz(zP))
+bool  tierEvOk = tier >= 3 or (tier == 2 and lowConfIn)
+bool  absorbed = gateOn and math.abs(nz(zF)) >= zfIn and sF * nz(zP) <= 0
+bool  pwf      = gateOn and not absorbed and math.abs(nz(zP)) >= zfIn and sP * nz(zF) <= 0
+bool  absPrev  = absorbed[1]
+bool  pwfPrev  = pwf[1]
+bool  newAbs   = barstate.isconfirmed and evIn and tierEvOk and absorbed and not absPrev
+bool  newPwf   = barstate.isconfirmed and pwfIn and tierEvOk and pwf and not pwfPrev
+string lowTxt  = tier == 2 ? " · baixa confiança" : ""
+if newAbs
+    label.new(bar_index, sF > 0 ? high : low, (sF > 0 ? "Fluxo comprador absorvido" : "Fluxo vendedor absorvido") + lowTxt, yloc = sF > 0 ? yloc.abovebar : yloc.belowbar, color = color.new(color.gray, 20), textcolor = color.white, style = sF > 0 ? label.style_label_down : label.style_label_up, size = size.tiny, tooltip = str.format("zF={0,number,#.##} zP={1,number,#.##} Z={2,number,#.##}", zF, zP, Z), force_overlay = true)
+if newPwf
+    label.new(bar_index, sP > 0 ? high : low, (sP > 0 ? "Preço a subir sem fluxo" : "Preço a cair sem fluxo") + lowTxt, yloc = sP > 0 ? yloc.abovebar : yloc.belowbar, color = color.new(color.orange, 30), textcolor = color.white, style = sP > 0 ? label.style_label_down : label.style_label_up, size = size.tiny, force_overlay = true)
+
+// ───────────────────────────── Visuais ─────────────────────────────
+// Contagem de plots: 3 linhas/Z + 2 níveis + 9 Data Window + 1 fill + 1 bgcolor + 6 alertcondition = 22 ≤ 64.
+color neutCol = color.gray
+color pAheadCol = #FF9800
+color fAheadCol = #2962FF
+bool showLines = viewIn != View.hist
+pPlot = plot(pLine, "Preço (normalizado)", color = showLines ? #B2B5BE : na, linewidth = 2)
+fPlot = plot(fLine, "CVD (normalizado)", color = showLines ? #26A69A : na, linewidth = 2)
+color fillCol = not gateOn or na(Z) ? color.new(neutCol, 92) : math.abs(Z) < 1 ? color.new(neutCol, 90) : Z > 0 ? color.from_gradient(Z, 1.0, thr2In, color.new(pAheadCol, 90), color.new(pAheadCol, 55)) : color.from_gradient(-Z, 1.0, thr2In, color.new(fAheadCol, 90), color.new(fAheadCol, 55))
+fill(pPlot, fPlot, color = fillCol, title = "Preenchimento divergência")
+plot(viewIn != View.lines ? Z : na, "Z divergência", style = plot.style_columns, color = gateOn ? (Z > 0 ? pAheadCol : fAheadCol) : neutCol)
+plot(viewIn != View.lines ? thrIn : na, "+Limiar", color = color.new(neutCol, 50))
+plot(viewIn != View.lines ? -thrIn : na, "−Limiar", color = color.new(neutCol, 50))
+hline(0, "Zero", color = color.new(color.gray, 60))
+bgcolor(newAnchor and (modeIn == Mode.sig or modeIn == Mode.imp) ? color.new(color.gray, 94) : na, title = "Âncora")
+
+plot(delta, "Delta (barra)", display = display.data_window)
+plot(cvdA, "CVD ancorado", display = display.data_window)
+plot(srP, "σr (bps)", display = display.data_window)
+plot(sdP, "σΔ", display = display.data_window)
+plot(rhoP, "ρ(r,Δ)", display = display.data_window)
+plot(lamOlsP, "λ OLS", display = display.data_window)
+plot(Z, "Z (estatística)", display = display.data_window)
+plot(pLeg, "Perna preço (P)", display = display.data_window)
+plot(fLeg, "Perna fluxo (F)", display = display.data_window)
+plot(zF, "zF", display = display.data_window)
+plot(zP, "zP", display = display.data_window)
+plot(tier, "Qualidade (tier)", display = display.data_window)
+plot(nIntra, "Intrabars", display = display.data_window)
+plot(gateOn ? 1 : 0, "Gate", display = display.data_window)
+
+// ───────────────────────────── Tabela ─────────────────────────────
+var table tb = table.new(position.top_right, 2, 4, bgcolor = color.new(color.black, 10), border_width = 1)
+if tblIn and barstate.islast
+    tb.cell(0, 0, "Fonte e qualidade", text_color = color.white, text_size = size.small)
+    tb.cell(1, 0, (useLtf ? "Intrabar " + ltf : "Barras do gráfico") + " · tier " + str.tostring(tier), text_color = color.white, text_size = size.small)
+    tb.cell(0, 1, "ρ(Δp,Δ)", text_color = color.white, text_size = size.small)
+    tb.cell(1, 1, str.tostring(rhoP, "#.##"), text_color = gateOn ? color.white : color.gray, text_size = size.small)
+    tb.cell(0, 2, "Z (K)", text_color = color.white, text_size = size.small)
+    tb.cell(1, 2, str.tostring(Z, "#.##"), text_color = color.white, text_size = size.small)
+    tb.cell(0, 3, "Volume", text_color = color.white, text_size = size.small)
+    tb.cell(1, 3, syminfo.volumetype, text_color = color.white, text_size = size.small)
+
+// ───────────────────────────── Alertas ─────────────────────────────
+bool zUp = gateOn and Z >= thrIn and not (Z[1] >= thrIn)
+bool zDn = gateOn and Z <= -thrIn and not (Z[1] <= -thrIn)
+alertcondition(zUp, "Z ≥ +limiar (preço à frente)", "{{ticker}} {{interval}}: Z ≥ +limiar")
+alertcondition(zDn, "Z ≤ −limiar (fluxo à frente)", "{{ticker}} {{interval}}: Z ≤ −limiar")
+alertcondition(newAbs and sF > 0, "Fluxo comprador absorvido", "{{ticker}} {{interval}}: fluxo comprador absorvido")
+alertcondition(newAbs and sF < 0, "Fluxo vendedor absorvido", "{{ticker}} {{interval}}: fluxo vendedor absorvido")
+alertcondition(newPwf and sP > 0, "Preço sem fluxo (subida)", "{{ticker}} {{interval}}: preço a subir sem fluxo")
+alertcondition(newPwf and sP < 0, "Preço sem fluxo (queda)", "{{ticker}} {{interval}}: preço a cair sem fluxo")
+if barstate.isconfirmed and (newAbs or newPwf)
+    alert(str.format("{0} {1}: evento | Z={2,number,#.##}", syminfo.ticker, timeframe.period, Z), alert.freq_once_per_bar_close)

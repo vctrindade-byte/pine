@@ -1,0 +1,15 @@
+# Dependências e ambientes locais
+node_modules
+.venv
+venv
+__pycache__/
+*.pyc
+# Relatórios e saídas dos testes
+tests/out/
+*.report.json
+# Dados de mercado nunca são versionados
+*.npz
+# SO / editores
+.DS_Store
+.idea/
+.vscode/
