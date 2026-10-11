@@ -294,7 +294,7 @@ const sameSet = (a, b) => a.length === b.length && setMinus(a, b).length === 0 &
 
 /**
  * Auditoria EXACTA da camada de eventos (METODOLOGIA §6.7 e §7): a partir dos plots do próprio indicador (zF, zP, gate,
- * qualidade, Z) e do OHLC re-deriva as classes (absorvido ∪ travado, preço sem fluxo), a 1.ª barra de cada
+ * qualidade, Z) e do OHLC rederiva as classes (absorvido ∪ travado, preço sem fluxo), a 1.ª barra de cada
  * aglomerado, a máquina de resolução (H0/L0 = máximo/mínimo em ke barras, vida em barras) e os alertas, e exige
  * igualdade com as etiquetas e os alertas emitidos. Usa os inputs por omissão (eventos e baixa confiança ligados).
  * Não verifica o cálculo de zF/zP (isso é o T8, contra a referência JS).

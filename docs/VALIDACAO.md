@@ -19,7 +19,7 @@ geradas de `src/price_cvd_normalizer.src.pine`), salvo indicação em contrário
 | Harness PineTS com dados sintéticos (T0–T11) | `npm test` | 614 verificações, 614 PASS (com `PINE_PYTHON`; sem pynescript, o T2 dá 1 WARN em vez das 2 verificações de parse) |
 | Concordância com a referência Python em dados reais | scripts de validação fora do repositório (exportação, execução no PineTS e referência Python) | corr(Z Pine, Z Python) = 1,000000, \|ΔZ\| máx 7,3 × 10⁻¹⁰, gate igual em 100% das barras |
 | Calibração em dados reais (BTCFDUSD, delta verdadeiro) | idem | P(\|Z\| ≥ 2) = 6,19% / 6,05%; P(\|Z\| ≥ 3) = 1,61% / 1,04% (duas janelas de 5 min) |
-| Cone, preço implícito, calibração provisória, costura (secção 3.6) | edição Standard no PineTS, dados reais | saídas do cone 17% (5 min) e 10% (15 min) contra 4,6% iid; \|P̂/C − 1\| p99 9% em 117 dias (33% na janela de 31 dias); com calibração provisória (n < 200), \|Z\| ≥ 2 1,3 vezes mais frequente; reinício na costura em 88% (15 min) e 20% (5 min) dos casos |
+| Cone, preço implícito, amplitude das linhas, calibração provisória, costura (secção 3.6) | edição Standard no PineTS, dados reais | saídas do cone 17% (5 min) e 10% (15 min) contra 4,6% iid; \|P̂/C − 1\| p99 9% em 117 dias (33% na janela de 31 dias); com calibração provisória (n < 200), \|Z\| ≥ 2 1,3 vezes mais frequente; reinício na costura em 88% (15 min) e 20% (5 min) dos casos; no fim do dia, \|F̃\| com mediana 17, p90 63 e máximo 324 (5 min) |
 
 ---
 
@@ -29,7 +29,7 @@ geradas de `src/price_cvd_normalizer.src.pine`), salvo indicação em contrário
 ficheiros do repositório: sem diferenças.
 
 **Parse.** As duas edições foram analisadas pelo parser `pynescript` 0.3.0 (gramática ANTLR do Pine), sem cache: ambas
-sem erros (148 s e 48 s num só processo; o primeiro parse inclui o aquecimento da cache do ANTLR).
+sem erros (147 s e 45 s num só processo; o primeiro parse inclui o aquecimento da cache do ANTLR).
 
 **Verificações estáticas (T3).** A edição Standard não contém `footprint` em código nem em texto visível ao utilizador
 (strings de dicas, rótulos, tabela e alertas; só em comentários); a Footprint tem exactamente um
@@ -37,15 +37,16 @@ sem erros (148 s e 48 s num só processo; o primeiro parse inclui o aquecimento 
 na linha 1 e o aviso de ficheiro gerado na linha 2; não sobram etiquetas `// @fp` ou `// @std`.
 
 **Built-ins.** Todos os identificadores com espaço de nomes usados em código (`ta.*`, `math.*`, `str.*`, `request.*`,
-`timeframe.*`, `chart.*`, `display.*`, …) foram procurados em duas cópias locais da referência do Pine v6. Na 1.ª
-cópia: 96/96 na Standard e 97/99 na Footprint; com o 2.º espelho, 99/99 na Footprint. Os dois que só estão no 2.º
-espelho, `footprint.delta()` e `footprint.total_volume()`, estão documentados aí (`pine-script-v6-md`: página do tipo
-`footprint` e exemplo do manual com `request.footprint()` → `footprint.total_volume()`/`footprint.delta()`, guardado
-por um ID não *na*). Uma revisão adversarial anterior, linha a linha contra a documentação (qualificadores, argumentos
-nomeados, ordem de declaração, quebras de linha), não encontrou bloqueadores de compilação; as construções
-introduzidas depois dessa revisão (`chart.is_standard`, `syminfo.prefix`, `precision` e `display` dependentes de
-inputs em `plot`/`hline`/`fill`, `timeframe.isticks`) foram verificadas contra as páginas correspondentes da
-referência.
+`timeframe.*`, `chart.*`, `display.*`, …) foram procurados em duas cópias locais da referência do Pine v6: a 1.ª é o
+espelho https://github.com/codenamedevan/pinescriptv6 e o 2.º espelho é
+https://github.com/chris-c-thomas/pine-script-v6-md. Na 1.ª cópia: 96/96 na Standard e 97/99 na Footprint; com o 2.º
+espelho, 99/99 na Footprint. Os dois que só estão no 2.º espelho, `footprint.delta()` e `footprint.total_volume()`,
+estão documentados aí (página do tipo `footprint` e exemplo do manual com `request.footprint()` →
+`footprint.total_volume()`/`footprint.delta()`, guardado por um ID não *na*). Uma revisão adversarial anterior, linha
+a linha contra a documentação (qualificadores, argumentos nomeados, ordem de declaração, quebras de linha), não
+encontrou bloqueadores de compilação; as construções introduzidas depois dessa revisão (`chart.is_standard`,
+`syminfo.prefix`, `display` dependente de inputs em `plot`/`hline`/`fill` (a `precision` é sempre literal: dois pares
+de plots), `timeframe.isticks`) foram verificadas contra as páginas correspondentes da referência.
 
 **Limites** (manual do Pine, «Limitations»):
 
@@ -70,7 +71,8 @@ stub. Os resultados são comparados com as fórmulas de [METODOLOGIA.md](METODOL
 de uma reimplementação independente em JavaScript (`tests/lib/refz.mjs`).
 
 Execução completa: `npm test` com `PINE_PYTHON` a apontar para um ambiente com `pynescript` 0.3.0, 20 blocos de testes
-(T0–T3 uma vez; T4–T11 em cada edição), **614 verificações, 614 PASS**, código de saída 0, 304 s. Sem `pynescript`, o
+(T0–T3 uma vez; T4–T11 em cada edição), **614 verificações, 614 PASS**, código de saída 0, 297 s com o parse sem
+cache (o tempo depende da máquina: ver «Tempo típico» em [tests/README.md](../tests/README.md)). Sem `pynescript`, o
 T2 dá 1 WARN (parse não executado) em vez das 2 verificações de parse.
 
 | Teste | O que verifica | Resultado |
@@ -81,7 +83,7 @@ T2 dá 1 WARN (parse não executado) em vez das 2 verificações de parse.
 | T3 | Verificações estáticas (secção 1), incluindo nenhum texto visível com «footprint» na Standard | 18/18 |
 | T4 | Matriz: 5 modos × {intrabar, só barras} × {âncora Auto, diária, semanal}, com as três vistas e os interruptores a rodar; na Footprint, também a fonte footprint | Standard 60/60; Footprint 12/12. Linhas finitas em 99,6–100% das barras depois do aquecimento; Z finito em 100% com intrabars e ausente (0%) com «Só barras do gráfico» |
 | T5 | Calibração nula: 4500 barras sem episódios, precisão 1S (qualidade alta) | P(\|Z\| ≥ 2) = **5,37%** (230/4281); P(\|Z\| ≥ 3) = **0,26%** (11/4281). Critérios: [2%, 12%] e < 3% |
-| T6 | Detecção de 10 absorções e 10 episódios de preço sem fluxo; auditoria **exacta** de rótulos, lados, «preço travado», resoluções e setas, de cada `alertcondition` e de cada `alert()`, re-derivados dos plots; precisão Auto (qualidade média, rótulos ocos); pivots ligados; série nula com \|zP\| máximo do «travado» = 3 (exclusão da classe CONFIRMADO) | 49/49 por edição. Z com o sinal esperado dentro do episódio em 10/10 absorções e 10/10 episódios de preço sem fluxo; absorção rotulada ou alertada em 10/10; P(\|Z\| ≥ 2) fora dos episódios 1,7% e 0,9%; pivots 41/41 topos e 44/44 fundos iguais à referência; todos os conjuntos de barras de rótulos e alertas iguais aos esperados |
+| T6 | Detecção de 10 absorções e 10 episódios de preço sem fluxo; auditoria **exacta** de rótulos, lados, «preço travado», resoluções e setas, de cada `alertcondition` e de cada `alert()`, rederivados dos plots; precisão Auto (qualidade média, rótulos ocos); pivots ligados; série nula com \|zP\| máximo do «travado» = 3 (exclusão da classe CONFIRMADO) | 49/49 por edição. Z com o sinal esperado dentro do episódio em 10/10 absorções e 10/10 episódios de preço sem fluxo; absorção rotulada ou alertada em 10/10; P(\|Z\| ≥ 2) fora dos episódios 1,7% e 0,9%; pivots 41/41 topos e 44/44 fundos iguais à referência; todos os conjuntos de barras de rótulos e alertas iguais aos esperados |
 | T7 | Invariantes: σ congelado em cada segmento, linhas interrompidas na âncora, fórmulas fechadas dos 5 modos, cone, remoção da deriva, costura da cobertura | 28/28 por edição; erro relativo ≤ 10⁻⁶ (≤ 10⁻⁴ no z-score de níveis, pela precisão do `ta.stdev` do PineTS); costura: reinício exactamente na barra 300 |
 | T8 | Concordância com a referência JS da estatística: série nula, absorções, blocos sem intrabars a meio, saltos de abertura e gaps de início de dia | 62/62 por edição: corr = 1,00000, \|Z Pine − Z ref\| máx < 10⁻⁹, Z definido exactamente nas mesmas barras; zF, zP, η, P_K, F_K, λ OLS, σr, σΔ e ρ iguais à referência (≤ 10⁻⁶); depois de um bloco sem intrabars, o Z volta 119 barras depois (hqNeed = 120) |
 | T9 | Motor de delta e qualidade: stub = delta verdadeiro; recurso BVC; volume zero; classificador BVC; 1S → 3; Auto em 5 min → 2; 1S com BVC → 2; «30S» → 2; LTF = gráfico → 1 sem Z; «Nenhum» → 0; volume de ticks e FX → 1, sem Z, sem eventos, aviso na tabela; unidade adaptativa do λ | 28/28 por edição |
@@ -93,8 +95,8 @@ código (por exemplo σ sem desfasamento, RMS que inclui a barra actual, sinal d
 trocadas, sem winsorização, alertas sem histerese, «travado» sem a exclusão da classe CONFIRMADO, sem o reinício na
 costura, qualidade alta com o BVC). Nas duas últimas rondas, 11/11 (revisão 3) e 5/5 (revisão 4: calibração mínima dos
 eventos e dos alertas de Z, aglomerados por lado, sufixo de confiança, volume de ticks) foram apanhadas. Continuam por
-apanhar, pelo menos, as mutações que só alteram texto da tabela (por exemplo, o NAR, mostrado com duas casas) e a da
-regra das cotações em «1T» (o PineTS não fornece cotações). A lista completa está em
+apanhar, pelo menos, as mutações que só alteram texto da tabela (por exemplo, o NAR, mostrado em % com uma casa
+decimal) e a da regra das cotações em «1T» (o PineTS não fornece cotações). A lista completa está em
 [tests/README.md](../tests/README.md).
 
 ---
@@ -159,6 +161,10 @@ Corridas da edição Standard sobre os mesmos dados, a partir da barra 320, com 
   Z médio −0,01 e 31 contra 28.
 - **Caudas do zF.** P(|zF| ≥ 3) foi 2,09% e 2,38% nas janelas de 5 minutos e 3,54% em 15 minutos: «preço travado» marca
   fluxo forte com o preço quase parado, não um extremo raro.
+- **Estados neutros.** Nas três corridas sem remoção da deriva (5 min 0–8999, 5 min 20000–31999 e 15 min), o sinal da
+  perna dominante (plots «Perna do preço (P_K)» e «Perna do fluxo (F_K)») coincidiu com o implicado pelo sinal de Z
+  em todas as 1828 barras com |Z| ≥ 2 (537 + 707 + 584), como a identidade de
+  [METODOLOGIA.md](METODOLOGIA.md#66-pernas-e-os-quatro-estados-neutros) exige.
 
 ### 3.5 Eventos e alertas em dados reais (5 min, 1S, janela 0–8999, 31 dias)
 
@@ -197,6 +203,23 @@ relação às escalas congeladas na âncora; a contribuição de cada factor nã
 metodologia ([METODOLOGIA.md](METODOLOGIA.md), secções 5.8 e 10) citam a medição directa. Os afastamentos grandes do
 preço implícito concentram-se em poucos dias de fluxo persistente: o percentil 99 de 33% da primeira janela cai para
 9% no histórico completo.
+
+**Amplitude das linhas ancoradas.** Valor absoluto das linhas em unidades-σ ancoradas (plots «Preço (normalizado)» e
+«CVD (normalizado)», cone desligado) na última barra de cada âncora diária, isto é, na barra anterior ao reinício (as
+linhas interrompem-se na barra da âncora). Só âncoras completas: ficam de fora a primeira (aquecimento) e a última
+(incompleta); todos os reinícios coincidiram com a mudança de dia UTC.
+
+| Dados | Âncoras | \|P̃\|: mediana / p90 / máx | \|F̃\|: mediana / p90 / máx | \|F̃ − P̃\|: mediana / p90 / máx |
+|---|---|---|---|---|
+| 5 min, 0–8999 (31 dias) | 30 | 11,4 / 34,6 / 49,9 | 15,4 / 50,8 / 323,8 | 15,2 / 55,1 / 283,9 |
+| 5 min, 20000–31999 (42 dias) | 41 | 11,5 / 22,4 / 48,1 | 18,3 / 49,5 / 97,7 | 11,0 / 35,1 / 83,7 |
+| 5 min, todo o histórico (117 dias) | 115 | 11,7 / 31,3 / 57,1 | 17,2 / 62,6 / 323,8 | 12,3 / 54,4 / 283,9 |
+| 15 min, todo o histórico (117 dias) | 114 | 6,8 / 17,1 / 34,1 | 7,5 / 23,1 / 80,0 | 6,5 / 21,6 / 58,1 |
+
+Em todas as barras (a partir da 320), o máximo de |F̃| foi 327,7 em 5 minutos e 80,6 em 15 minutos. Um |F̃| grande
+no fim do dia é, por construção, delta acumulado num só sentido; os valores extremos concentram-se em poucos dias (o
+p90 fica muito abaixo do máximo), tal como os afastamentos grandes do preço implícito. O README e a dica da vista do
+painel citam a linha «5 min, todo o histórico».
 
 **Calibração provisória.** Para simular a cobertura curta de 1S, cada corrida tem 400 barras sem intrabars (BVC na
 barra, qualidade baixa) seguidas de 1300 barras com 1S, a partir de pontos de reinício espalhados pelo histórico (123
@@ -289,7 +312,10 @@ Antes de publicar, numa conta TradingView (idealmente uma Premium ou Ultimate e 
     substituídos por valores e que a mensagem dinâmica começa por «BOLSA:SÍMBOLO timeframe ·».
 12. **Erros explícitos.** Num gráfico de ticks e num Heikin Ashi, o script pára com a mensagem em português.
 13. **Símbolos sem volume e com volume de ticks.** Num índice sem volume: «Sem dados de volume para este símbolo.»
-    Num par FX: qualidade baixa, «⚠ volume de ticks», sem Z nem eventos.
+    Num par FX: qualidade baixa, «⚠ volume de ticks», sem Z nem eventos. Num CFD (por exemplo OANDA:SPX500USD):
+    registar o «Tipo de volume» da tabela; se não vier declarado como ticks, o indicador não o detecta (o
+    `syminfo.type` não tem valor para CFD) e a qualidade segue a fonte, com Z e eventos; confirmar que as dicas o
+    explicam.
 14. **Tempo real.** Acompanhar algumas barras ao vivo: Z, estados e eventos só mudam ao fecho da barra; os alertas
     disparam uma vez por barra fechada.
 15. **Aspecto.** Temas claro e escuro: contraste das linhas, dos rótulos ocos e dos avisos da tabela; a tabela compacta

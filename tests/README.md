@@ -5,7 +5,7 @@ Harness automático que verifica as duas edições geradas (`price_cvd_normalize
 [PineTS](https://www.npmjs.com/package/pinets) (runtime Pine Script para Node, versão fixada **0.11.0**)
 sobre barras sintéticas com **delta verdadeiro conhecido** e compara o resultado com o oráculo dos testes: as
 fórmulas e regras de [docs/METODOLOGIA.md](../docs/METODOLOGIA.md). Essas fórmulas foram reimplementadas de forma
-independente em JavaScript (`tests/lib/refz.mjs`, usado no T7, T8 e T10) e, para a validação com dados reais, em
+independente em JavaScript (`tests/lib/refz.mjs`, usado no T0 e no T7–T11) e, para a validação com dados reais, em
 Python, fora do repositório (método e resultados em [docs/VALIDACAO.md](../docs/VALIDACAO.md), secção 3).
 
 > O PineTS **não** é o compilador da TradingView. Os testes provam o comportamento numérico e a lógica;
@@ -37,8 +37,8 @@ PINETS_DIR=/caminho/para/node_modules npm test         # ou indica a pasta direc
 
 ```bash
 npm test                                      # edições Standard + Footprint (T0–T11)
-npm run test:quick                            # matriz reduzida (≈ 1/3 do tempo)
-npm run test:standin                          # auto-teste do harness com tests/fixtures/standin.pine
+npm run test:quick                            # matriz reduzida (menos execuções PineTS)
+npm run test:standin                          # autoteste do harness com tests/fixtures/standin.pine
 node tests/run_tests.mjs --only T5,T6 -v      # só alguns testes, mostrando também o que passou
 node tests/run_tests.mjs --json tests/out/relatorio.json
 ```
@@ -53,9 +53,12 @@ nº de CPUs − 1, máx. 4), `HARNESS_INPROCESS=1` (sem workers, para depuraçã
 
 O código de saída é ≠ 0 se algum teste tiver **FAIL**. **WARN** e **SKIP** não fazem falhar a suite.
 
-Tempo típico (4 CPUs): ≈ 3 min quando as edições mudaram (o T2 leva ~2 min: o ANTLR do pynescript faz o parse de
-cada edição em ~1 min; os ficheiros inalterados ficam em `tests/out/parse-cache.json`) e ≈ 2 min nas execuções
-seguintes. Os testes T5–T11 correm nas duas edições. Cada execução PineTS (≈ 5 s para 3000 barras do indicador real) corre num *worker thread* novo:
+Tempo típico (medido com 4 CPUs e `HARNESS_JOBS` = 3; depende da máquina e da carga): ≈ 5–6 min quando as edições
+mudaram (o T2 leva ~3–4 min: o ANTLR do pynescript faz o parse da Standard em ~2,5 min e da Footprint em ~1 min, num
+só processo; os ficheiros inalterados ficam em `tests/out/parse-cache.json`) e ≈ 5 min nas execuções seguintes,
+porque o parse corre em paralelo com as execuções PineTS, que dominam o tempo. Com `--quick` e o parse das duas
+edições, ≈ 4 min. Os testes T5–T11 correm nas duas edições. Cada execução PineTS (≈ 7–8 s para 3000 barras do
+indicador real; até ~11 s enquanto o parse corre) corre num *worker thread* novo:
 o PineTS 0.11.0 fica progressivamente mais lento quando reutiliza o mesmo isolate (medido: 4,7 s → 8,6 s em 5
 execuções iguais), e os workers permitem correr 3 execuções em paralelo. Todas as execuções planeadas são lançadas
 no arranque e os testes avaliam-nas por ordem, por isso o tempo mostrado por teste é só o de avaliação.
@@ -64,16 +67,16 @@ no arranque e os testes avaliam-nas por ordem, por isso o tempo mostrado por tes
 
 | ID | O que verifica | Critério de sucesso |
 |----|----------------|---------------------|
-| T0 | Auto-verificação do harness: PineTS carrega; o stub devolve 5 intrabars por barra cuja soma é o delta do canal; `timeframe.in_seconds()` = 300; `timeframe.change("1D"/"1W")` e `session.isfirstbar` nas viragens UTC apesar dos ms do canal; `syminfo.mintick`; títulos e inputs descobertos; built-ins usados existem no PineTS | tudo exacto; built-ins em falta → WARN |
+| T0 | Autoverificação do harness: PineTS carrega; o stub devolve 5 intrabars por barra cuja soma é o delta do canal; `timeframe.in_seconds()` = 300; `timeframe.change("1D"/"1W")` e `session.isfirstbar` nas viragens UTC apesar dos ms do canal; `syminfo.mintick`; títulos e inputs descobertos; built-ins usados existem no PineTS | tudo exacto; built-ins em falta → WARN |
 | T1 | `python3 tools/build.py --check` | sai com 0 |
 | T2 | Parse de ambas as edições com pynescript | sem erro (SKIP+WARN se não houver pynescript) |
 | T3 | Estático: a Standard não tem `footprint` em código (fora de comentários/strings) nem em texto visível (strings fora de comentários: dicas, rótulos, tabela, alertas); a Footprint tem exactamente 1 `request.footprint()`; linha 1 `//@version=6`, banner na linha 2; linha única do pedido intrabar (ver «Stub do `request.security_lower_tf`»); sem etiquetas `// @fp`/`// @std` remanescentes | todos |
 | T4 | Matriz: cada modo de visualização × {LTF (stub), "Só barras do gráfico"} × {âncora Auto, Diária, Semanal}, ~3000 barras com 5% iniciais sem intrabars, barras de volume 0 e dois episódios; as vistas e os toggles (cone, pivots, deriva, overlay) rodam entre execuções. Na edição Footprint: fonte footprint servida pelo provider | sem excepções; linhas finitas em ≥ 95% das barras após o aquecimento; Z finito ≥ 95% (fonte LTF); footprint: delta = compra − venda, tier 3, barras sem footprint seguem o fallback/preenchimento |
 | T5 | Calibração nula: 4500 barras sem episódios, precisão 1S (tier 3) | P(\|Z\| ≥ 2) ∈ [2%, 12%] e P(\|Z\| ≥ 3) < 3% |
-| T6 | Detecção: 10 absorções (fluxo forte e persistente, λ≈0, 20–40 barras, lados alternados) e 10 episódios de preço sem fluxo (deriva, Δ≈0); mais uma execução com precisão Auto (qualidade média), outra com **pivots ligados e \|zP\| máximo do «travado» = 2.0** e a série nula com **\|zP\| máximo do «travado» = 3.0** (há aí barras da classe CONFIRMADO com \|zF\| ≥ 3). **Auditoria exacta dos eventos**: a partir dos plots do próprio indicador (zF, zP, ρ, gate, qualidade, Z, delta, σΔ) e do OHLC re-deriva as classes (absorvido ∪ travado sem a classe CONFIRMADO s·zP ≥ \|ρ\|·\|zF\|, preço sem fluxo), a 1.ª barra de cada aglomerado (por classe **e lado**, com período refractário de ke barras: novo aglomerado quando o lado muda ou depois de > ke barras sem a classe do mesmo lado), a máquina de resolução (H0/L0 em ke barras, vida), os alertas de Z com histerese (1.º cruzamento; rearme depois de Z < limiar − 1) **só com ≥ 2N valores de calibração** (o cruzamento anterior desarma na mesma), os alertas de eventos e das suas resoluções só com calibração do zF/zP ≥ max(20·ke, 2N) (contagens derivadas dos Z/zF finitos anteriores) e, com pivots, uma referência independente dos pivots (regra de empates do PineTS, CVD contínuo em R, magnitude em σΔ, distância 5–60, hqSpan) | Z com o sinal esperado e \|Z\| ≥ 2 dentro do episódio em ≥ 70%; etiqueta ou alertcondition "absorvido" em ≥ 50% das absorções; auditoria: conjuntos de barras das etiquetas e de cada alertcondition (incl. «Preço travado sob compras/vendas extremas» e pivots topo/fundo) e alert() **iguais** aos esperados, lado, «preço travado», resolução e seta ↑/↓ da resolução de cada etiqueta iguais; etiquetas dos pivots na barra do pivot; texto do estado nas mensagens alert() dos cruzamentos de Z = sinal de Z + perna dominante (\|F_K\| vs \|P_K\|); qualidade média → rótulos ocos (65% de transparência); em todas as auditorias, cada rótulo com «(baixa conf.)» (qualidade média) ou «(cal. prov.)» (calibração fraca) e oco exactamente nesses casos |
+| T6 | Detecção: 10 absorções (fluxo forte e persistente, λ≈0, 20–40 barras, lados alternados) e 10 episódios de preço sem fluxo (deriva, Δ≈0); mais uma execução com precisão Auto (qualidade média), outra com **pivots ligados e \|zP\| máximo do «travado» = 2,0** e a série nula com **\|zP\| máximo do «travado» = 3,0** (há aí barras da classe CONFIRMADO com \|zF\| ≥ 3). **Auditoria exacta dos eventos**: a partir dos plots do próprio indicador (zF, zP, ρ, gate, qualidade, Z, delta, σΔ) e do OHLC rederiva as classes (absorvido ∪ travado sem a classe CONFIRMADO s·zP ≥ \|ρ\|·\|zF\|, preço sem fluxo), a 1.ª barra de cada aglomerado (por classe **e lado**, com período refractário de ke barras: novo aglomerado quando o lado muda ou depois de > ke barras sem a classe do mesmo lado), a máquina de resolução (H0/L0 em ke barras, vida), os alertas de Z com histerese (1.º cruzamento; rearme depois de Z < limiar − 1) **só com ≥ 2N valores de calibração** (o cruzamento anterior desarma na mesma), os alertas de eventos e das suas resoluções só com calibração do zF/zP ≥ max(20·ke, 2N) (contagens derivadas dos Z/zF finitos anteriores) e, com pivots, uma referência independente dos pivots (regra de empates do PineTS, CVD contínuo em R, magnitude em σΔ, distância 5–60, hqSpan) | Z com o sinal esperado e \|Z\| ≥ 2 dentro do episódio em ≥ 70%; etiqueta ou alertcondition "absorvido" em ≥ 50% das absorções; auditoria: conjuntos de barras das etiquetas e de cada alertcondition (incl. «Preço travado sob compras/vendas extremas» e pivots topo/fundo) e alert() **iguais** aos esperados, lado, «preço travado», resolução e seta ↑/↓ da resolução de cada etiqueta iguais; etiquetas dos pivots na barra do pivot; texto do estado nas mensagens alert() dos cruzamentos de Z = sinal de Z + perna dominante (\|F_K\| vs \|P_K\|); qualidade média → rótulos ocos (65% de transparência); em todas as auditorias, cada rótulo com «(baixa conf.)» (qualidade média) ou «(cal. prov.)» (calibração fraca) e oco exactamente nesses casos |
 | T7 | Invariantes em "Unidades-σ ancoradas": linhas interrompidas (na) na barra de reinício e, na seguinte, F = (Δ_a + Δ_a+1)/σΔ_a, P = 1e4·ln(C/O_a)/σr_a; σ congelado em todo o segmento; "CVD ancorado" reinicia nas âncoras. "Preço implícito" com λσ: linha de preço = close e (ln fLine − lnA) / perna de fluxo sig = σr_a/1e4. Formas fechadas de "janela móvel", "Z-score de níveis" e "Mín–máx"; cone = ±2·√(2n(1 − max(ρ_a, 0))); com a deriva removida, incremento do CVD ancorado = Δ − SMA_N(Δ)[1]. **Costura da cobertura** (200 barras iniciais sem intrabars): as linhas reiniciam nas âncoras do calendário e uma vez na 1.ª barra cuja janela σ/ρ (N barras) está toda em dados finos, com σΔ congelado aí | erro relativo ≤ 1e-6 (1e-5 na razão; 1e-4 no z-score de níveis, pela precisão do `ta.stdev` do PineTS) |
-| T8 | Concordância com a referência JS das fórmulas de METODOLOGIA §3, §6 e §7 (`tests/lib/refz.mjs`) na série nula, na de absorções, na série nula com **blocos sem intrabars a meio do histórico** (1500+5 e 3000+30 barras → fallback BVC, tier 1) e em duas séries com **saltos de abertura** (guarda de gaps, METODOLOGIA §3.1: ~1% das barras com \|ln(O/C₋₁)\| de 60–120 bps ≈ 8–15σ e gaps N(0, 3 bps) em cada início de dia; a 2.ª com 0,3% de barras isoladas sem intrabars) | corr(Z Pine, Z ref) ≥ 0.98; Z definido **exactamente** nas mesmas barras (hqOk = N + max(K, ke) barras seguidas de qualidade ≥ média); \|Z Pine − Z ref\| ≤ 1e-6 desde a barra 3N + K; zF e zP = referência (≤ 1e-6); pernas P_K/F_K, λ OLS (×1000) e η do Data Window = referência (≤ 1e-6; só edições reais); nas séries com saltos, delta por barra = referência (stub; BVC na barra com r = ln(C/O) nos gaps); σr/σΔ/ρ do Data Window = referência (WARN) |
-| T9 | Motor de delta e tier: stub = delta verdadeiro; "Intrabars" = 5 (0 sem intrabars); classificador BVC = soma do array BVC; barras sem intrabars → BVC na barra (tier 1); volume 0 → delta 0 e tier anterior; precisão Auto → tier 2, 1S → tier 3, 1S com BVC → tier 2, personalizado "30S" → tier 2, personalizado = TF do gráfico → tier 1 sem Z; "Só barras" = BVC; fallback "Nenhum" → delta na, tier 0; volume de ticks (`syminfo.volumetype` "tick" ou `syminfo.type` "forex", série nula em 1S) → tier 1 (sem lado agressor), sem Z, sem eventos nem alertas, tabela com «⚠ volume de ticks» e «Sem sinais: volume de ticks»; unidade adaptativa do λ: com volume × 1e6 o λσ aparece «por 1 milhão de unidades» com valor em [0.1, 1000) e igual ao original / 1e6 | exacto (1e-9 / 1e-6; 1e-7 no BVC; λ ± 2%) |
+| T8 | Concordância com a referência JS das fórmulas de METODOLOGIA §3, §6 e §7 (`tests/lib/refz.mjs`) na série nula, na de absorções, na série nula com **blocos sem intrabars a meio do histórico** (1500+5 e 3000+30 barras → fallback BVC, tier 1) e em duas séries com **saltos de abertura** (guarda de gaps, METODOLOGIA §3.1: ~1% das barras com \|ln(O/C₋₁)\| de 60–120 bps ≈ 8–15σ e gaps N(0, 3 bps) em cada início de dia; a 2.ª com 0,3% de barras isoladas sem intrabars) | corr(Z Pine, Z ref) ≥ 0,98; Z definido **exactamente** nas mesmas barras (hqOk = N + max(K, ke) barras seguidas de qualidade ≥ média); \|Z Pine − Z ref\| ≤ 1e-6 desde a barra 3N + K; zF e zP = referência (≤ 1e-6); pernas P_K/F_K, λ OLS (×1000) e η do Data Window = referência (≤ 1e-6; só edições reais); nas séries com saltos, delta por barra = referência (stub; BVC na barra com r = ln(C/O) nos gaps); σr/σΔ/ρ do Data Window = referência (WARN) |
+| T9 | Motor de delta e tier: stub = delta verdadeiro; "Intrabars" = 5 (0 sem intrabars); classificador BVC = soma do array BVC; barras sem intrabars → BVC na barra (tier 1); volume 0 → delta 0 e tier anterior; precisão Auto → tier 2, 1S → tier 3, 1S com BVC → tier 2, personalizado "30S" → tier 2, personalizado = TF do gráfico → tier 1 sem Z; "Só barras" = BVC; fallback "Nenhum" → delta na, tier 0; volume de ticks (`syminfo.volumetype` "tick" ou `syminfo.type` "forex", série nula em 1S) → tier 1 (sem lado agressor), sem Z, sem eventos nem alertas, tabela com «⚠ volume de ticks» e «Sem sinais: volume de ticks»; unidade adaptativa do λ: com volume × 1e6 o λσ aparece «por 1 milhão de unidades» com valor em [0,1; 1000) e igual ao original / 1e6 | exacto (1e-9 / 1e-6; 1e-7 no BVC; λ ± 2%) |
 | T10 | `request.security_lower_tf` **nativo, sem stub**: o provider serve sub-barras de 1 min (15% doji, 3% volume 0, viragens de dia) e o PineTS avalia o `ltfSigned` do próprio indicador no contexto intrabar; mais uma execução com intrabars esparsos (2 das 5 sub-barras) | 5 intrabars/barra, tier 2, delta = referência JS da regra da vela (lado transportado entre barras) e do BVC por intrabar (erro ≤ 1e-7); esparsos: 2 intrabars/barra e «⚠ poucos intrabars» (2.0 de 5 possíveis) na tabela |
 | T11 | Timeframes fora dos 5 min (`target.run(…, { timeframe })`): 1m com Auto (intrabars = gráfico) e com 1S, 1h, D (âncora Auto e âncora diária inválida), W, gráfico de 1S com Auto, e âncora «Sessão personalizada» em 5m (0830-1515 e 1700-1600, que atravessa a meia-noite). A auditoria de eventos do T6 corre também em 1m/1S (ke = 15), 1h (ke = vida = 1) e 15m/1S com absorções de uma barra e lados opostos em barras seguidas (ke = 1: tem de haver ≥ 1 inversão de lado com evento nas duas barras) | qualidade por precisão (1m/1S-Auto → 1 sem Z; 1h/D/W-Auto → 2; 1S → 3); a linha do fluxo interrompe-se exactamente nas âncoras do calendário (diária, mensal, anual, sessão; 1700-1600 só às 17:00, nunca também à meia-noite); tabela com o estado/âncora esperados («Sem sinais no gráfico de 1 min: escolha 1S ou 1T», «… de 1 s: escolha 1T», «âncora inválida»); nota «Apenas contexto» só em ≥ 1h; alert() começa por «HARNESS:SYNBTC 1 min ·» / «… 1 h ·» (prefixo da bolsa; horas em h) |
 
@@ -191,7 +194,7 @@ Vinte mutações aplicadas a cópias de `price_cvd_normalizer.pine` (Standard), 
 | ordem antiga do tier (1S num gráfico de 1S = alta) | T11 |
 | alertas de resolução sem o lado (evSide já reiniciado) | T6 |
 | linha do fluxo sem interrupção na âncora | T7, T11 |
-| **sobrevive:** NAR calculado com o delta sem deriva | — (só na tabela, com 2 casas, e só com a deriva removida: ±0.01 em dados nulos) |
+| **sobrevive:** NAR calculado com o delta sem deriva | — (só na tabela, com 2 casas, e só com a deriva removida: ±0,01 em dados nulos) |
 
 ### Mutações no indicador real (revisão 2, verificação de execução)
 
@@ -220,7 +223,7 @@ edição Standard (`--target std --file-std MUTANTE --only T4,…,T11 --quick`):
 | gap sem `session.isfirstbar` | T8 |
 | η sem λ OLS | T8 (η contra a referência JS) |
 | sessão personalizada com a regra antiga (`dayChg` também em sessões que atravessam a meia-noite) | T11 (1700-1600) |
-| «travado» sem excluir a classe CONFIRMADO (s·zP ≥ \|ρ\|·\|zF\|) | T6 (série nula com \|zP\| travado ≤ 3; com o máximo por omissão 0.5 a exclusão é inócua) |
+| «travado» sem excluir a classe CONFIRMADO (s·zP ≥ \|ρ\|·\|zF\|) | T6 (série nula com \|zP\| travado ≤ 3; com o máximo por omissão 0,5 a exclusão é inócua) |
 | alertas de Z sem histerese (1.º cruzamento simples) | T6, T11 |
 | sem reinício das linhas na costura da cobertura | T7 (costura) |
 | qualidade alta também com o classificador BVC | T9 |
@@ -241,8 +244,8 @@ aplicadas a cópias da edição Standard (`--target std --file-std MUTANTE --onl
 | volume de ticks com qualidade média em vez de baixa | T9 |
 | alertas de Z sem o mínimo de 2N valores de calibração | T6, T11 |
 
-Continua por verificar numericamente: o NAR (só na tabela, com 2 casas) e a regra das cotações em «1T» (sem cotações
-no provider do PineTS).
+Continua por verificar numericamente: o NAR (só na tabela, em % com uma casa decimal) e a regra das cotações em
+«1T» (sem cotações no provider do PineTS).
 
 ## Ficheiros
 

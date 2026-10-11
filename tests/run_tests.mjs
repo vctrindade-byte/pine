@@ -94,7 +94,7 @@ async function main() {
   for (const t of ready) prefetch(t, runtimeIds.filter((id) => id !== 'T4'), { quick: args.quick, nBars: args.bars });
   console.log(`PineTS em workers isolados: até ${maxJobs()} execuções em paralelo (HARNESS_JOBS para alterar).`);
 
-  await plain('T0', 'Auto-verificação do harness (PineTS, canal do delta, timeframe, inputs, built-ins)', (tc) => {
+  await plain('T0', 'Autoverificação do harness (PineTS, canal do delta, timeframe, inputs, built-ins)', (tc) => {
     for (const t of targets) if (!t.ready) tc.warn(`alvo ${t.rel} indisponível`, t.initError.message.split('\n')[0]);
     return t0SelfCheck(tc, targets);
   });

@@ -35,7 +35,8 @@ cada negócio, e de simulações.
 8. [Divergência por pivots](#8-divergência-por-pivots)
 9. [Interpretação honesta](#9-interpretação-honesta)
 10. [Diferenças em relação ao dossier](#10-diferenças-em-relação-ao-dossier)
-11. [Bibliografia anotada](#bibliografia-anotada)
+
+[Bibliografia anotada](#bibliografia-anotada)
 
 ---
 
@@ -174,7 +175,10 @@ h=\begin{cases}1 & \text{volume de ticks}\\ 3 & \text{caso contrário}\end{cases
 $$
 
 «Volume de ticks» significa `syminfo.volumetype == "tick"` ou `syminfo.type == "forex"`: o volume conta negócios ou
-actualizações de cotação, sem lado agressor, e o delta é derivado do preço (decisão D8 do dossier). Em cada barra:
+actualizações de cotação, sem lado agressor, e o delta é derivado do preço (decisão D8 do dossier). O `syminfo.type`
+não tem valor para CFD e o `syminfo.volumetype` só vem declarado em alguns símbolos: um CFD (ou outro símbolo) com
+volume de ticks não declarado não é detectado e recebe a qualidade da fonte; as dicas pedem para confirmar o «Tipo de
+volume» na tabela. Em cada barra:
 
 1. Fonte «Só barras do gráfico» → BVC na barra, qualidade 1.
 2. Footprint seleccionado e com dados nesta barra → delta do footprint, qualidade *h*.
@@ -274,7 +278,7 @@ desequilíbrio persistente [E].
 | Opção | Reinício | Notas |
 |---|---|---|
 | **Auto** (por omissão) | gráfico ≤ 60 min → «1D»; 60 min < gráfico < 1D → «1W»; 1D ≤ gráfico < 1W → «1M»; ≥ 1W → «12M», via `timeframe.change()` | «1D» é o dia de negociação da bolsa: no CME é o dia **Globex**, não a sessão regular [V-sec]; em cripto é o dia UTC |
-| Sessão regular (RTH) | `session.isfirstbar_regular` [V] | Só intradiário. No CME pode coincidir com o dia Globex e em cripto/FX com a diária: nesses casos usa-se a sessão personalizada |
+| Sessão regular (RTH) | `session.isfirstbar_regular` [V] | Só intradiário. No CME pode coincidir com o dia Globex e em cripto/FX com a diária: nesses casos, use a sessão personalizada |
 | Sessão personalizada | 1.ª barra dentro da sessão (por omissão 0830-1515, hora da bolsa); ou a barra que contém a hora de início; ou a 1.ª barra do dia, só em sessões que não atravessam a meia-noite | Aceita sessões como 1700-1600 sem reiniciar à meia-noite |
 | Diária, semanal, mensal | `timeframe.change(tf)` | Só válida se `timeframe.in_seconds(tf)` for maior do que o gráfico; senão usa-se a Auto e a tabela avisa |
 
@@ -317,7 +321,7 @@ séries contínuas.
 |---|---|
 | Viés de classificação (por exemplo, o lado transportado em intrabars sem variação) | Linhas ancoradas; estatísticas sobre incrementos normalizados |
 | Desequilíbrio estrutural de agressores (perpétuos, descontos de *maker*) | «Remover deriva do fluxo»: d = Δ − média_N(Δ)_{t−1}. Desligado por omissão; sugerido em perpétuos de cripto e quando a tabela avisa. Em testes ajudou a calibração quando o preço só reage às inovações do fluxo e piorou a detecção quando o fluxo persistente move o preço [E] |
-| Fluxo de memória longa e previsível que não move o preço (metaordens divididas; Hasbrouck: inovações [V]) | O mesmo interruptor; a recalibração empírica (RMS) absorve a variância super-difusiva |
+| Fluxo de memória longa e previsível que não move o preço (metaordens divididas; Hasbrouck: inovações [V]) | O mesmo interruptor; a recalibração empírica (RMS) absorve a variância superdifusiva |
 | Mudança de estimador na fronteira da cobertura | Qualidade por barra, marca no fundo, reinício das janelas estatísticas e costura da secção 4.4 |
 | Gaps nocturnos sem delta (dados só da sessão) | Guarda de gaps da secção 3.1 |
 
@@ -486,7 +490,7 @@ P(|Z| > 3) (2,1% → 1,1%) e melhorou a detecção precoce (0,30 → 0,48 nas pr
 ### 6.3 Calibração: RMS não centrado e desfasado
 
 O denominador analítico √(2K(1 − ρ)) não chega: os sinais das ordens têm memória longa (função de autocorrelação
-~τ^−0,6, Lillo e Farmer [V]), o CVD é super-difusivo e o escalamento em √K falha. Só com o denominador analítico a
+~τ^−0,6, Lillo e Farmer [V]), o CVD é superdifusivo e o escalamento em √K falha. Só com o denominador analítico a
 taxa nula P(|Z| > 2) foi de 10–18% [E]. Por isso D é recalibrado empiricamente pelo seu **RMS não centrado** nos
 valores **anteriores**:
 
@@ -512,7 +516,7 @@ sobreposta, com autocorrelação de ordem 1 de (K − 1)/K = 0,95): a tabela mos
 **alertas** de Z só disparam com pelo menos 2N valores de calibração (o aquecimento de 2N do dossier): em dados reais,
 com 100 a 199 valores de calibração (o caso de 1S num gráfico de 5 minutos), P(|Z| ≥ 2) foi cerca de 1,3 vezes e P(|Z|
 ≥ 3) 1,2–1,6 vezes o das mesmas barras com a calibração completa; o excesso desce para ~1,1 vezes com 200 a 399
-valores e ~1,05 com 400 ou mais ([VALIDACAO.md](VALIDACAO.md), secção 3.6) [E].
+valores e para ~1,05 (|Z| ≥ 2) e ≤ 1,1 (|Z| ≥ 3) com 400 ou mais ([VALIDACAO.md](VALIDACAO.md), secção 3.6) [E].
 
 ### 6.4 Condição sobre os dados
 
@@ -571,7 +575,8 @@ absoluto) determina o sinal da perna dominante:
 | Z ≥ +limiar, \|P\| ≥ \|F\| | P > 0 | Preço a subir sem fluxo comprador proporcional | Subida não confirmada: recompra de vendas a descoberto com ordens limite, retirada de ofertas de venda ou notícia |
 
 Não há quinto estado além dos empates (que caem no ramo do preço). Em dados reais, a coerência entre o sinal de Z e o
-sinal implicado da perna dominante foi de 100% em 2087 barras com |Z| ≥ 2 [E].
+sinal implicado da perna dominante foi de 100% nas 1828 barras com |Z| ≥ 2 das três corridas sem remoção da deriva da
+secção 3.4 de [VALIDACAO.md](VALIDACAO.md) [E].
 
 ### 6.7 Alertas de Z
 
@@ -789,7 +794,7 @@ difere nos pontos seguintes, todos deliberados:
 
 | Tema | Dossier | Implementação |
 |---|---|---|
-| Qualidade alta | Intrabars de ticks ou de segundos | Só «1T» ou «1S» com a regra da vela; outros segundos/ticks e o BVC: média. Símbolos com volume de ticks (FX à vista, CFD): no máximo baixa |
+| Qualidade alta | Intrabars de ticks ou de segundos | Só «1T» ou «1S» com a regra da vela; outros segundos/ticks e o BVC: média. Símbolos com volume de ticks declarado ou FX à vista: no máximo baixa (os CFD com volume de ticks não declarado não são detectados; secção 2.6) |
 | Costura da cobertura | Marcar a transição e recomeçar o aquecimento | Também reinicia as linhas uma vez quando a escala congelada veio de uma janela mista (secção 4.4) |
 | Aquecimento do Z | 2N valores antes de mostrar o Z | Z mostrado com N valores (calibração provisória assinalada); alertas de Z com 2N; eventos sem alertas com menos de max(20·k_e, 2N) |
 | Condição de dados do Z | Janelas σ/ρ em dados de qualidade ≥ média | Todas as janelas de todos os termos: N + max(K, k_e) barras seguidas (+N com a deriva) |
@@ -799,6 +804,9 @@ difere nos pontos seguintes, todos deliberados:
 | Janela do evento | max(1, round(900/seg)) | Limitada a M/20 barras |
 | Tipo de volume | Aviso para «tick» e «n/a» | «n/a» é o normal fora de cripto e não leva aviso; o volume de ticks leva aviso e corta a qualidade |
 | Âncoras | Auto, RTH, 1D/1W/1M | Mais a sessão personalizada |
+| Arquitectura do footprint | Um só script (D10) | Duas edições geradas da mesma fonte: a Standard, sem código nem texto visível do footprint, e a Footprint, com um único `request.footprint()` dentro de `if` (README, «Edições e planos da TradingView») |
+| Classe «travado» | \|z_F\| ≥ 3 e \|z_P\| ≤ 0,5 | Também exclui a classe CONFIRMADO (secção 7.2) |
+| λ na tabela | bps por 1000 unidades | Unidade adaptativa: 1, 10³, 10⁶, … unidades, a que deixa λσ ≥ 0,1 (secção 6.9); o Data Window mantém «λ OLS (bps/1000)» |
 | Cone nulo iid | Cone verdadeiro cerca de 15–30% mais largo, por causa da memória longa do fluxo (estimativa pelo VR20 = 1,30) | Mesmo cone; a dica e a documentação citam a medição directa em dados reais: desvio RMS 1,5 (15 min) a 2,3 vezes (5 min) o do cone, 10% e 17% de saídas em vez de 4,6% (secção 5.8) |
 | Divergência por pivots | Pivots no mesmo segmento de âncora | CVD contínuo e os dois pivots no mesmo regime de qualidade ≥ média; só a linha pontilhada do painel exige a mesma âncora (secção 8) |
 | Não implementado | Candidatos de exaustão; marca de reversão à média (Dickey-Fuller); transformação côncava do fluxo; λ assimétrico; alerta «gate aberto» | — |
@@ -830,7 +838,7 @@ são citados como factos.
 - **Xu, K., Gould, M.D., Howison, S.D. (2019).** Multi-Level Order-Flow Imbalance in a Limit Order Book. **[V]** O
   ajuste melhora com cada nível de profundidade. https://arxiv.org/abs/1907.06230
 - **Lillo, F., Farmer, J.D. (2004).** The long memory of the efficient market. *SNDE* 8(3). **[V]** Autocorrelação dos
-  sinais ~τ^−0,6. *Uso:* o CVD é super-difusivo; o escalamento em √K falha; é precisa calibração empírica.
+  sinais ~τ^−0,6. *Uso:* o CVD é superdifusivo; o escalamento em √K falha; é precisa calibração empírica.
   https://arxiv.org/abs/cond-mat/0311053
 - **Lillo, F., Mike, S., Farmer, J.D. (2005).** Theory for long memory in supply and demand. *PRE* 71. **[V]** (resumo).
   A divisão de metaordens com lei de potência gera memória longa nos sinais. https://arxiv.org/abs/cond-mat/0412708
@@ -952,7 +960,8 @@ são citados como factos.
   («só contas Premium ou Ultimate podem usar scripts que chamam esta função»; um único local de chamada),
   `request.security_lower_tf` (devolve um ID de array *na* com `ignore_invalid_timeframe`), limites de intrabars,
   `input.*(…, active)`, `timeframe.change`, `session.isfirstbar_regular`, limite de 64 plots.
-  https://github.com/codenamedevan/pinescriptv6
+  https://github.com/codenamedevan/pinescriptv6 (1.ª cópia) e https://github.com/chris-c-thomas/pine-script-v6-md
+  (2.º espelho, com as páginas de `footprint.delta()` e `footprint.total_volume()`)
 - **TradingView/LucF, CVD Candles v8 e CVD Chart v3 (2026).** **[V]** (espelho do código). Modos de reinício, caixa de
   cobertura e aviso com menos de 5 intrabars por barra.
 - **ata_sabanci, VFP-Intro (2026).** **[V]** (espelho do código). Padrão de um único `request.footprint()` dentro de um

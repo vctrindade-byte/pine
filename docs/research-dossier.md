@@ -1,8 +1,9 @@
 > **Nota (PT-PT).** Este é o dossier de investigação original, em inglês, que serviu de base ao código do indicador
 > «Preço × CVD Normalizado [Order Flow]». Fica aqui como documento de referência e histórico. Onde
-> a implementação final difere (regra dos níveis de qualidade, costura da cobertura, aglomerados de eventos, histerese
-> dos alertas, funcionalidades não implementadas, como os candidatos de exaustão, a marca de Dickey-Fuller e a
-> transformação côncava do fluxo), prevalece [METODOLOGIA.md](METODOLOGIA.md), em especial a secção 10. Os excertos de
+> a implementação final difere (duas edições geradas da mesma fonte em vez de um só script, regra dos níveis de
+> qualidade, costura da cobertura, aglomerados de eventos, histerese dos alertas, funcionalidades não implementadas,
+> como os candidatos de exaustão, a marca de Dickey-Fuller e a transformação côncava do fluxo), prevalece
+> [METODOLOGIA.md](METODOLOGIA.md), em especial a secção 10. Os excertos de
 > código Pine da secção 7.3 são esboços anteriores à implementação e não correspondem ao código final.
 >
 > As marcas [V], [V-sec], [M] e [E] mantêm o significado original; números marcados [V-sec] ou [M] não devem ser citados

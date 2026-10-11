@@ -144,9 +144,10 @@ const string TT_PREC    = "Timeframe dos intrabars. Auto = paridade com o CVD da
      "de 100 000 elementos de um array. 1S exige Premium ou superior e 1T exige Ultimate; se o plano não os " +
      "suportar, o script pode dar erro ou ficar sem intrabars (a tabela mostra a fonte efectiva). Qualidade: 1T ou " +
      "1S abaixo do timeframe do gráfico, com a regra da vela = alta; outros intrabars abaixo do gráfico (ou o BVC) = " +
-     "média; iguais ou superiores ao gráfico = baixa (sem sinais); com volume de ticks (FX à vista, CFD) sempre " +
-     "baixa (sem lado agressor: sem sinais). Num gráfico de 1 min o Auto usa intrabars iguais ao gráfico: escolha 1S " +
-     "ou 1T para ter sinais; num de 1 s, só 1T."
+     "média; iguais ou superiores ao gráfico = baixa (sem sinais); com volume de ticks declarado pelo fornecedor ou " +
+     "em FX à vista, sempre baixa (sem lado agressor: sem sinais). CFD e outros símbolos com volume de ticks não " +
+     "declarado não são detectados: confirme o «Tipo de volume» na tabela. Num gráfico de 1 min o Auto usa " +
+     "intrabars iguais ao gráfico: escolha 1S ou 1T para ter sinais; num de 1 s, só 1T."
 const string TT_CUST    = "Usado só com a precisão «Personalizado». Tem de ser inferior ao timeframe do gráfico; " +
      "se for igual, a qualidade é baixa (sem sinais); se for superior não há intrabars e aplica-se a regra das " +
      "barras sem intrabars."
@@ -195,12 +196,12 @@ const string TT_OVL     = "Desenha também o preço implícito pelo fluxo no gr�
 const string TT_VIEW    = "Linhas: as duas pernas; o preenchimento entre elas codifica o Z calibrado das últimas K " +
      "barras, enquanto a distância entre as linhas acumula desde a âncora — podem discordar. Histograma Z: só o Z " +
      "da divergência. Linhas + Z: ambos, mas as linhas esmagam as colunas Z (±2 a ±4): em unidades-σ ancoradas " +
-     "chegam a ±15–30 ao fim do dia e no modo preço implícito estão na escala do preço."
+     "acabam o dia tipicamente em ±10–20 (dados reais, 5 min; a do CVD passou ±60 em ~10% dos dias e chegou a ≈ 320 " +
+     "com fluxo persistente) e no modo preço implícito estão na escala do preço."
 const string TT_CONE    = "Cone nulo iid (±2σ) para a linha do fluxo à volta da linha do preço, só em unidades-σ " +
-     "ancoradas: ±2·√(2n(1−ρ)), n = barras desde a âncora. É só uma referência iid, aproximadamente correcta nas " +
-     "primeiras ~20 barras: o fluxo tem memória longa e a volatilidade intradiária varia. Em dados reais com âncora " +
-     "diária o desvio real (RMS) foi ~2.3 vezes o do cone em 5 min (cerca de 17% de saídas em vez de 4.6%) e ~1.5 " +
-     "vezes em 15 min (10% de saídas)."
+     "ancoradas: ±2·√(2n(1−ρ)), n = barras desde a âncora. É só uma referência iid: o fluxo tem memória longa e a " +
+     "volatilidade intradiária varia. Em dados reais com âncora diária o desvio real (RMS) foi ~2.3 vezes o do cone " +
+     "em 5 min (cerca de 17% de saídas em vez de 4.6%) e ~1.5 vezes em 15 min (10% de saídas)."
 const string TT_BG      = "Fundo ténue nas barras de âncora (modos ancorados) e nas mudanças de qualidade dos " +
      "dados (transições entre fontes de delta)."
 const string TT_N       = "Janela, em barras, de σr, σΔ e ρ. Calculados sobre incrementos e desfasados uma barra."
@@ -209,16 +210,16 @@ const string TT_M       = "Janela do RMS não centrado que calibra o Z (recomend
      "visíveis as divergências persistentes. Enquanto houver menos de M valores a calibração é provisória (a " +
      "tabela mostra n/M) e o Z é menos fiável; com o histórico curto de 1S/1T o M raramente é atingido (com 1S num " +
      "gráfico de 5 min, em dados reais, |Z| ≥ 2 foi ~1.3 vezes e |Z| ≥ 3 até ~1.6 vezes mais frequente do que com a " +
-     "calibração completa nas mesmas barras). " +
-     "Os alertas de Z só disparam com pelo menos 2N valores (o aquecimento de 2N do dossier). Com menos de 20·K " +
-     "valores (≈ 20 janelas independentes) as colunas e o preenchimento não passam da intensidade abaixo do limiar."
+     "calibração completa nas mesmas barras). Os alertas de Z só disparam com pelo menos 2N valores. Com menos de " +
+     "20·K valores (≈ 20 janelas independentes) as colunas e o preenchimento não passam da intensidade abaixo " +
+     "do limiar."
 const string TT_CLIP    = "As unidades-σ de cada barra são limitadas a ±c antes de somar (guarda contra a " +
      "concavidade do impacto e as caudas pesadas)."
 const string TT_THR     = "|Z| ≥ limiar marca divergência (cerca de 6% das barras em dados reais, antes do gate). " +
      "Os alertas de Z disparam no 1.º cruzamento e só voltam a armar depois de o Z regressar a menos de limiar − 1 " +
      "(do mesmo lado). Com um desequilíbrio persistente de agressores (ver «Remover deriva do fluxo») um dos lados " +
      "dispara mais vezes."
-const string TT_THR2    = "|Z| ≥ limiar forte (cerca de 1–1.5% das barras em dados reais). Intensidade máxima do " +
+const string TT_THR2    = "|Z| ≥ limiar forte (cerca de 1–1.6% das barras em dados reais). Intensidade máxima do " +
      "preenchimento."
 const string TT_RHO     = "Gate efectivo = max(este valor, tanh(1.96/√(N−3))). Com ρ abaixo do gate o Z fica a " +
      "cinzento e não há sinais; com dados de qualidade baixa o Z não é calculado."
@@ -571,7 +572,8 @@ if not ltfTick                                       // não chamar timeframe.in
     ltfSec := timeframe.in_seconds(ltf)
 // Volume de ticks (declarado, ou FX à vista): conta negócios ou actualizações de cotação, sem lado agressor nem
 // quantidades → o delta é derivado do preço e, pela regra da fonte derivada do preço (dossier D8), qualidade
-// baixa: linhas sim, Z e eventos não.
+// baixa: linhas sim, Z e eventos não. O syminfo.type não tem valor para CFD: um CFD com volume de ticks não declarado
+// não é detectado (as dicas pedem para confirmar o «Tipo de volume» na tabela).
 bool tickLike = syminfo.volumetype == "tick" or syminfo.type == "forex"
 int  hiTier   = tickLike ? 1 : 3
 // Primeiro "não inferior ao gráfico" (ex.: 1S num gráfico de 1S): 1 intrabar = a própria barra → delta derivado do
@@ -717,8 +719,8 @@ else if tier == 0
     stateTxt := "Sem dados de delta nesta barra"
 else if tier == 1 and tickLike and (useLtf or useFp)
     stateTxt := "Sem sinais: volume de ticks (sem lado agressor)"
-    stateTip := "O volume deste símbolo conta negócios ou, em FX à vista e CFD, actualizações de cotação: não há lado " +
-         "agressor e o delta é derivado do preço. As linhas são só visuais."
+    stateTip := "Volume de ticks (declarado pelo fornecedor, ou FX à vista): conta negócios ou actualizações de " +
+         "cotação, não há lado agressor e o delta é derivado do preço. As linhas são só visuais."
 else if tier == 1 and useLtf
     // Caso típico: Auto num gráfico de 1 min (intrabars de 1 min) ou de 1 s (intrabars de 1 s).
     stateTxt := tfSec <= 1 ? "Sem sinais no gráfico de 1 s: escolha 1T" : tfSec <= 60 ? "Sem sinais no gráfico de " +
@@ -1088,7 +1090,8 @@ if newPwf
 
 // ── Divergência por pivots (clássica, opcional): CVD contínuo lido na barra do pivot do preço ──
 // Os desenhos convertem bar_index em time internamente; uma linha em tempo real até pivMax + R barras atrás
-// (≤ 1050 com os inputs permitidos) exige esse histórico de "time" (concepts/common_errors.md).
+// (≤ 1050 com os inputs permitidos) exige esse histórico de "time" (manual do Pine, «Error messages» → «Max bars
+// back with Pine drawings»).
 max_bars_back(time, 1100)
 float ph        = ta.pivothigh(high, pivLIn, pivRIn)
 float pl        = ta.pivotlow(low, pivLIn, pivRIn)
@@ -1159,7 +1162,8 @@ if pivTop or pivBot
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════
 // 10. VISUAIS
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════
-// Contagem de plots (limite 64; writing_scripts/limitations.md — plot/fill com cor série/bgcolor/alertcondition contam):
+// Contagem de plots (limite 64; manual do Pine, «Limitations» → «Plot limits»: plot/fill com cor série, bgcolor e
+// alertcondition contam):
 //   2 pares de linhas × [preço 1 + CVD (cor série: esbatido em barras derivadas do preço) 2 + fill (cor série) 1] = 8
 //   + colunas Z (valor + cor série) 2 + cone 2 + preço implícito no gráfico 1 + bgcolor 1 + Data Window 16
 //   + alertcondition 14 = 44 (≤ 64; pior caso, se as cores dependentes de inputs contassem como série: +4 → 48).
@@ -1289,10 +1293,11 @@ if tblIn and barstate.islast
     // Tipo de volume: aviso só para volume de ticks (declarado, ou FX à vista); "n/a" é o normal fora de cripto.
     string vt      = syminfo.volumetype
     string vtTxt   = volTypeName(vt) + (syminfo.type == "forex" and vt != "tick" ? " · FX: provável volume de ticks" : "")
-    string vtTip   = tickLike ? "Volume de ticks: conta negócios ou, em FX à vista e CFD, actualizações de cotação, não " +
-         "quantidades; não há lado agressor e o delta é derivado do preço: qualidade baixa, só as linhas (sem Z nem eventos)." :
-         vt == "base" or vt == "quote" ? "Volume qualificado pelo fornecedor." : "O fornecedor não qualifica o volume (habitual " +
-         "fora de cripto): em acções e futuros costuma ser o volume real (acções/contratos); confirme que não é volume de ticks."
+    string vtTip   = tickLike ? "Volume de ticks (declarado pelo fornecedor, ou FX à vista): conta negócios ou actualizações " +
+         "de cotação, não quantidades; não há lado agressor e o delta é derivado do preço: qualidade baixa, só as linhas (sem Z " +
+         "nem eventos)." : vt == "base" or vt == "quote" ? "Volume qualificado pelo fornecedor." : "O fornecedor não qualifica " +
+         "o volume (habitual fora de cripto): em acções e futuros costuma ser o volume real (acções/contratos). O volume de " +
+         "ticks não declarado (por exemplo, em CFD) não é detectado: se for o caso, ignore o Z e os eventos."
     float  zFis    = atanhF(nz(rhoP))
     float  seF     = 1.0 / math.sqrt(nIn - 3)
     string rhoTxt  = na(rhoP) ? "—" : f2(rhoP) + " [" + f2(tanhF(zFis - 1.96 * seF)) + ", " + f2(tanhF(zFis + 1.96 * seF)) +
@@ -1434,7 +1439,8 @@ bool alResHS = alRes and resHeld and resSide < 0
 bool alPwfU  = alPwf and sP > 0
 bool alPwfD  = alPwf and sP < 0
 
-// Valores e qualidade nas mensagens (placeholders {{plot("título")}}, visuals/plots.md): qualidade 2 = baixa confiança.
+// Valores e qualidade nas mensagens (placeholders {{plot("título")}}, manual do Pine, «Plots»): qualidade 2 = baixa
+// confiança.
 const string AL_Z = ' · Z = {{plot("Z (valor)")}} · qualidade {{plot("Qualidade (0–3)")}} (3 alta, 2 média)'
 const string AL_E = ' · zF = {{plot("zF (evento)")}} · zP = {{plot("zP (evento)")}} · qualidade {{plot("Qualidade (0–3)")}} ' +
      '(3 alta, 2 média = baixa confiança)'

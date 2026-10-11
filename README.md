@@ -122,7 +122,9 @@ Não edite os ficheiros `.pine` da raiz: são gerados. Altere `src/price_cvd_nor
   esbatida nas barras de qualidade baixa, em que o delta é derivado do próprio preço.
 - As linhas interrompem-se na barra da âncora e recomeçam perto de zero. A **distância** entre elas é, no essencial,
   o resíduo acumulado desde a âncora: é contexto, não sinal. A linha do fluxo afasta-se naturalmente mais (memória
-  longa dos sinais das ordens, ρ < 1) e, com fluxo persistente num só sentido, pode chegar a ±15–30.
+  longa dos sinais das ordens, ρ < 1): em dados reais de 5 minutos, no fim do dia, a linha do CVD ficou tipicamente
+  a ±17 (mediana do valor absoluto; a do preço, ±12), passou ±63 em 10% dos dias e, em dias de fluxo persistente num
+  só sentido, chegou a cerca de ±320 ([VALIDACAO.md](docs/VALIDACAO.md), secção 3.6).
 
 Os outros modos (preço implícito pelo fluxo, janela móvel, z-score de níveis, mín–máx) estão na tabela de
 [parâmetros](#parâmetros); os dois últimos são só visuais e não geram sinais.
@@ -182,8 +184,8 @@ Os eventos usam zF e zP, as pernas do fluxo e do preço numa janela de ~15 minut
 
 Só a primeira barra fechada de cada aglomerado (por classe e lado) gera rótulo. Rótulos cheios com qualidade alta;
 ocos com «(baixa conf.)» com qualidade média (por exemplo, intrabars de 1 minuto); ocos com «(cal. prov.)» enquanto a
-calibração do zF/zP for fraca (sem alertas); nenhum com qualidade baixa. Em gráficos de 1 hora ou mais, os eventos
-são apenas contexto.
+calibração do zF/zP for fraca (ou «(baixa conf.)», se a qualidade também for média); nenhum com qualidade baixa. Com
+calibração fraca não há alertas. Em gráficos de 1 hora ou mais, os eventos são apenas contexto.
 
 ### Resolução da absorção
 
@@ -210,13 +212,19 @@ Evidência fraca.
 |---|---|---|---|---|
 | **Alta (3)** | Footprint; intrabars 1T ou 1S abaixo do timeframe do gráfico, com a regra da vela | sim | sim | estilo normal |
 | **Média (2)** | Outros intrabars abaixo do gráfico (1 minuto, 5S–45S, …) ou o classificador BVC | sim | sim | ocos, «baixa conf.» |
-| **Baixa (1)** | Intrabars não inferiores ao gráfico; BVC na barra (sem intrabars); volume de ticks (FX à vista, CFD) | sim, CVD esbatido | não | não |
+| **Baixa (1)** | Intrabars não inferiores ao gráfico; BVC na barra (sem intrabars); volume de ticks declarado (`syminfo.volumetype` = "tick") ou FX à vista | sim, CVD esbatido | não | não |
 | **Sem dados (0)** | «Barras sem intrabars» = Nenhum, numa barra sem intrabars | interrompidas | não | não |
 
-**Porquê.** Em dados reais com o lado agressor de cada negócio (BTC, barras de 5 minutos), o que interessa para a
-divergência é a parte do delta que o preço não explica. A sua correlação parcial com o delta verdadeiro foi 0,80–0,88
-com intrabars de 1 segundo, 0,29–0,87 com intrabars de 1 minuto e tipicamente 0,1–0,4 com estimativas a partir das
-barras do gráfico. Um delta derivado das barras do gráfico é, no essencial, uma cópia do preço ponderada pelo volume.
+**Volume de ticks.** Só é detectado quando o fornecedor o declara (`syminfo.volumetype` = "tick") ou em FX à vista. CFD
+e outros símbolos com volume de ticks não declarado não são detectados e recebem a qualidade da fonte (média ou alta,
+com Z e eventos): confirme o «Tipo de volume» na tabela completa (ou na dica da célula da fonte, na compacta) e, se
+for volume de ticks, ignore o Z e os eventos.
+
+**Porquê.** Em dados reais com o lado agressor de cada negócio (cripto e acções, barras de 5 minutos), o que
+interessa para a divergência é a parte do delta que o preço não explica. A sua correlação parcial com o delta
+verdadeiro foi 0,80–0,88 com intrabars de 1 segundo (em cripto), 0,29–0,87 com intrabars de 1 minuto e tipicamente
+0,1–0,4 com estimativas a partir das barras do gráfico. Um delta derivado das barras do gráfico é, no essencial, uma
+cópia do preço ponderada pelo volume.
 
 **Precisão Auto** (paridade com o CVD da TradingView):
 
@@ -264,7 +272,7 @@ calibração suficientes.
 | Sessão personalizada (âncora) | 0830-1515 | Início da sessão que ancora as linhas, na hora da bolsa; aceita sessões que atravessam a meia-noite |
 | Janela W | 100 | Janela dos modos em janela móvel, z-score de níveis e mín–máx (10–1000) |
 | Escala de impacto λ | λσ = σr/σΔ | Só no modo preço implícito. λ OLS = ρ·σr/σΔ encolhe a linha do fluxo pelo factor ρ |
-| Mostrar preço implícito no gráfico principal | desligado | Desenha o preço implícito pelo fluxo sobre as velas (referência visual, não preço justo) |
+| Mostrar preço implícito no gráfico principal | desligado | Só no modo preço implícito. Desenha o preço implícito pelo fluxo sobre as velas (referência visual, não preço justo) |
 | Vista do painel | Linhas | Linhas, Histograma Z, ou Linhas + Z |
 | Cone nulo iid (±2σ) | desligado | Só em unidades-σ ancoradas |
 | Marcar âncoras e mudanças de qualidade | ligado | Fundo ténue nas âncoras e nas transições de qualidade |
@@ -278,7 +286,7 @@ calibração suficientes.
 | Janela de calibração (M) | 1000 | RMS não centrado que calibra o Z (300–2000; recomendado ≥ 5N) |
 | Winsorizar unidades-σ em ± | 4,0 | Limita as unidades-σ de cada barra antes de somar (guarda contra caudas pesadas e impacto côncavo) |
 | Limiar \|Z\| | 2,0 | Marca divergência: cerca de 6% das barras em dados reais |
-| Limiar forte \|Z\| | 3,0 | Intensidade máxima do preenchimento: cerca de 1–1,5% das barras em dados reais |
+| Limiar forte \|Z\| | 3,0 | Intensidade máxima do preenchimento: cerca de 1–1,6% das barras em dados reais |
 | ρ mínimo (gate) | 0,30 | Gate efectivo = max(este valor, tanh(1,96/√(N−3))); abaixo dele o Z fica cinzento e não há sinais |
 
 ### Eventos
@@ -333,7 +341,8 @@ Regras:
 
 - Os alertas de Z voltam a armar só depois de o Z regressar a menos de limiar − 1 do mesmo lado, e exigem pelo menos 2N
   valores de calibração.
-- Os eventos com calibração fraca («cal. prov.») não alertam, nem as suas resoluções. Uma expiração sozinha não alerta.
+- Os eventos com calibração fraca do zF/zP não alertam, nem as suas resoluções (rótulo «(cal. prov.)», ou «(baixa
+  conf.)» com qualidade média). Uma expiração sozinha não alerta.
 - As mensagens incluem a qualidade (3 alta, 2 média = baixa confiança). Nos alertas de resolução, a confiança é a do
   evento resolvido.
 
