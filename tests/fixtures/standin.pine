@@ -1,8 +1,8 @@
 //@version=6
-// Stand-in de TESTES — NÃO é o indicador. Imita as construções-chave de spec.md (enums, linha LTF única,
+// Stand-in de TESTES — NÃO é o indicador. Imita as construções-chave do indicador (enums, linha LTF única,
 // estado var, ta.stdev/correlation, math.sum, timeframe.change, labels, tabela, fill, alertcondition) para
 // validar o harness (tests/run_tests.mjs) enquanto o indicador real é escrito em paralelo.
-// A estatística Z segue spec §5 (C1, clip ±c, RMS não-centrado dos valores ANTERIORES, gate ρ).
+// A estatística Z segue docs/METODOLOGIA.md §6 (C1, clip ±c, RMS não-centrado dos valores ANTERIORES, gate ρ).
 indicator("Preço × CVD Normalizado [stand-in de testes]", shorttitle = "P×CVD stand-in", overlay = false, format = format.price, precision = 2, explicit_plot_zorder = true, max_labels_count = 500, max_lines_count = 500)
 
 // ───────────────────────────── Inputs ─────────────────────────────
@@ -99,7 +99,7 @@ rmsLag(float x, int m, int warm) =>
     out
 
 ltfSigned(int sigLen) =>
-    // regra da vela com lado transportado (spec §4.1); sem regra de cotações bid/ask no stand-in
+    // regra da vela com lado transportado (METODOLOGIA §2.2); sem regra de cotações bid/ask no stand-in
     var int dir = 1
     float cPrev = close[1]
     int pDir = close > open ? 1 : close < open ? -1 : close > cPrev ? 1 : close < cPrev ? -1 : 0
@@ -145,7 +145,7 @@ tier := nz(volume) == 0 ? tier : useLtf ? cfgTier : 1
 var int hqRun = 0
 hqRun := tier >= 2 ? hqRun + 1 : 0
 
-// ───────────────────────────── Estatística (spec §5) ─────────────────────────────
+// ───────────────────────────── Estatística (METODOLOGIA §3, §6) ────────────────────────────
 float d    = delta
 float r    = na(d) ? na : rBar
 float sr   = ta.stdev(r, nIn)
@@ -156,7 +156,7 @@ float sdP  = sd[1]
 float rhoP = rho[1]
 float ur   = srP > 0 ? clip(r / srP, clipIn) : na
 float ud   = sdP > 0 ? clip(d / sdP, clipIn) : na
-// hqOk (spec revista): as janelas σ/ρ de todos os termos das somas K e ke inteiras em barras de tier ≥ 2.
+// hqOk (METODOLOGIA §6.4): as janelas σ/ρ de todos os termos das somas K e ke inteiras em barras de tier ≥ 2.
 int   keHq = math.min(math.max(1, math.round(evWinIn * 60 / tfSec)), math.max(1, math.floor(mIn / 20.0)))
 bool  hqOk = tier >= 2 and hqRun >= nIn + math.max(kIn, keHq)
 float sumU = math.sum(ur - ud, kIn)
@@ -171,7 +171,7 @@ float pLeg = hqOk ? sumP / math.sqrt(kIn) : na
 float fLeg = hqOk ? sumF / math.sqrt(kIn) : na
 float lamOlsP = sdP > 0 ? nz(rhoP) * srP / sdP : na
 
-// ───────────────────────────── Âncora e linhas (spec §6) ─────────────────────────────
+// ───────────────────────────── Âncora e linhas (METODOLOGIA §4) ─────────────────────────────
 string autoTf = tfSec <= 3600 ? "1D" : tfSec < 86400 ? "1W" : tfSec < 604800 ? "1M" : "12M"
 string anchTf = switch anchIn
     Anchor.d1  => "1D"
@@ -244,7 +244,7 @@ if na(d)
     pLine := na
     fLine := na
 
-// ───────────────────────────── Eventos (spec §7, simplificado) ─────────────────────────────
+// ───────────────────────────── Eventos (METODOLOGIA §7, simplificado) ────────────────────────────
 int   ke   = math.max(1, math.round(evWinIn * 60 / tfSec))
 float fEs  = math.sum(ud, ke)
 float pEs  = math.sum(ur, ke)

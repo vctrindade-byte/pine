@@ -74,7 +74,7 @@ As duas edições são geradas a partir de uma única fonte (`src/price_cvd_norm
 |---|---|---|
 | Ficheiro | `price_cvd_normalizer.pine` | `price_cvd_normalizer_footprint.pine` |
 | Título (abreviado) | Preço × CVD Normalizado [Order Flow] (P×CVD) | Preço × CVD Normalizado [Order Flow · Footprint] (P×CVD FP) |
-| Planos | Todos | Todos para intrabars; Premium ou Ultimate para a fonte Footprint |
+| Planos | Todos | Premium ou Ultimate para a fonte Footprint; noutros planos, com a fonte Intrabar, não verificado (use a edição Standard) |
 | Fontes de delta | Intrabar; só barras do gráfico | Intrabar; **Footprint**; só barras do gráfico |
 | `request.footprint()` | Não existe no código | Um único local de chamada, só executado com a fonte Footprint |
 
@@ -137,7 +137,7 @@ Os outros modos (preço implícito pelo fluxo, janela móvel, z-score de níveis
 - As vistas «Histograma Z» e «Linhas + Z» mostram o Z em colunas, com os limiares (±2 tracejado, ±3 pontilhado). Em
   «Linhas + Z» as linhas dominam a escala; para ver ambos legíveis, adicione o indicador duas vezes.
 - O **cone nulo** opcional (±2·√(2n(1 − max(ρ_a, 0))) à volta da linha do preço) é só uma referência iid: em dados
-  reais de 5 minutos a linha do fluxo saiu dele em ~17% das barras, não ~4,6%.
+  reais com âncora diária a linha do fluxo saiu dele em ~17% das barras em 5 minutos e ~10% em 15 minutos, não ~4,6%.
 - O **fundo** marca as barras de âncora (cinzento) e as mudanças de qualidade do delta (castanho), por exemplo no
   início da cobertura dos intrabars.
 

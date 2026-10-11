@@ -1,13 +1,14 @@
-// Reimplementação JS de referência de spec §4.3 (rBar), §5 (σ, ρ, unidades-σ, D, RMS desfasado, Z, gate,
-// pernas) — independente do Pine. Usada no T7/T8 para comparar com a saída do indicador no PineTS.
+// Reimplementação JS de referência de docs/METODOLOGIA.md §3.1 (rBar), §3.3 e §6 (σ, ρ, unidades-σ, D, RMS desfasado,
+// Z, gate, pernas) — independente do Pine. Usada no T7/T8 para comparar com a saída do indicador no PineTS.
 // Convenções Pine: ta.stdev é o desvio-padrão POPULACIONAL (biased = true); x[1] é o valor da barra anterior;
 // ATENÇÃO: aqui as janelas são estritas (NaN se houver um na na janela). No Pine (docs da TradingView e PineTS 0.11.0)
 // math.sum/ta.sma/ta.stdev/ta.correlation SALTAM os na (usam os últimos `length` valores não-na). Os resultados só
 // coincidem enquanto Δ não tiver na a meio do histórico — é o caso de todos os conjuntos do T8 (o fallback «Nenhum»,
 // que produz Δ = na, não é comparado aqui).
-// O mesmo algoritmo está em Python em scratchpad/validation/ref_z.py (validação com dados reais).
+// O mesmo algoritmo foi reimplementado em Python, fora do repositório, para a validação com dados reais
+// (docs/VALIDACAO.md, secção 3).
 
-// ke = janela dos eventos em barras (spec §7; 3 em 5 min); hqNeed por omissão = N + max(K, ke) (+ N com deriva).
+// ke = janela dos eventos em barras (METODOLOGIA §7.1; 3 em 5 min); hqNeed por omissão = N + max(K, ke) (+ N com deriva).
 export const REF_DEFAULTS = Object.freeze({ N: 100, K: 20, M: 1000, clip: 4.0, rhoMin: 0.30, sigLenBar: 100, warm: null, ke: 3, drift: false, hqNeed: null });
 
 const isF = Number.isFinite;
@@ -59,7 +60,7 @@ export function lag1(x) {
 const clipv = (v, c) => Math.max(-c, Math.min(c, v));
 
 /**
- * RMS não-centrado dos valores ANTERIORES (spec §5 rmsLag; dossier §7.3: "previous m non-na values"):
+ * RMS não-centrado dos valores ANTERIORES (METODOLOGIA §6.3; dossier §7.3: "previous m non-na values"):
  * cnt = nº de valores válidos anteriores; cnt > m → RMS dos últimos m valores VÁLIDOS (os na são saltados,
  * como no ta.sma do Pine); cnt ≥ warm → média expansiva; senão NaN. Sem lacunas em x é idêntico a usar as
  * últimas m barras; depois de uma lacuna (tier ≤ 1 a meio do histórico) o Z volta logo que hqOk volta.
@@ -89,7 +90,7 @@ export function utcWeekKey(ms) { const d = Math.floor(ms / 86400000); return Mat
 
 export function utcMonthKey(ms) { const dt = new Date(ms); return dt.getUTCFullYear() * 12 + dt.getUTCMonth(); }
 
-/** rBar (spec §4.3) com guarda de gaps. */
+/** rBar (METODOLOGIA §3.1) com guarda de gaps. */
 export function computeRBar(open, close, openTime, sigLen = 100) {
   const n = close.length;
   const rRaw = new Float64Array(n).fill(NaN);
@@ -105,11 +106,11 @@ export function computeRBar(open, close, openTime, sigLen = 100) {
 }
 
 /**
- * Estatísticas de spec §5 a partir de rBar, delta e tier por barra.
+ * Estatísticas de METODOLOGIA §3.3 e §6 a partir de rBar, delta e tier por barra.
  * hqOk: tier ≥ 2 há ≥ hqNeed barras seguidas, hqNeed = N + max(K, ke) (+ N com deriva): as janelas σ/ρ desfasadas
- * de TODOS os termos das somas K e ke ficam inteiras em barras de qualidade ≥ média (revisão da spec §5).
+ * de TODOS os termos das somas K e ke ficam inteiras em barras de qualidade ≥ média (METODOLOGIA §6.4).
  * @returns objecto com séries Float64Array: r, d, sr, sd, rho, srP, sdP, rhoP, ur, ud, hqOk, D, rmsD, Z, gate, pLeg, fLeg,
- *          fE, pE, zF, zP (eventos, spec §7), lamOls e eta (η, eficiência de impacto)
+ *          fE, pE, zF, zP (eventos, METODOLOGIA §7.1), lamOls e eta (η, eficiência de impacto)
  */
 export function computeRef({ rBar, delta, tier, opts = {} }) {
   const o = { ...REF_DEFAULTS, ...opts };
@@ -153,7 +154,7 @@ export function computeRef({ rBar, delta, tier, opts = {} }) {
   const zF = new Float64Array(n).fill(NaN), zP = new Float64Array(n).fill(NaN);
   for (let t = 0; t < n; t++) { if (rmsF[t] > 0 && isF(fE[t])) zF[t] = fE[t] / rmsF[t]; if (rmsP[t] > 0 && isF(pE[t])) zP[t] = pE[t] / rmsP[t]; }
   // λ OLS desfasado (bps por unidade de delta) e eficiência de impacto η = Σ_ke r / (λ_OLS·Σ_ke Δ), só com |F_e| ≥ 1.5
-  // (spec §5, dossier §6.2: contexto no Data Window/tabela).
+  // (METODOLOGIA §6.9, dossier §6.2: contexto no Data Window/tabela).
   const lamOls = new Float64Array(n).fill(NaN), eta = new Float64Array(n).fill(NaN);
   const sumRKe = rollingSum(r, o.ke), sumDKe = rollingSum(d, o.ke);
   for (let t = 0; t < n; t++) {
@@ -164,7 +165,7 @@ export function computeRef({ rBar, delta, tier, opts = {} }) {
   return { r, d, sr, sd, rho, srP, sdP, rhoP, ur, ud, hqOk, D, rmsD, Z, gate, pLeg, fLeg, rhoMin, hqNeed, fE, pE, zF, zP, lamOls, eta };
 }
 
-/** Delta do fallback BVC na barra (spec §4.3): nz(volume)·(2Φ(clip(rBar/σ_{t−1}, ±10)) − 1). */
+/** Delta do fallback BVC na barra (METODOLOGIA §2.5): nz(volume)·(2Φ(clip(rBar/σ_{t−1}, ±10)) − 1). */
 export function computeBarDelta(rBar, volume, sigLen = 100) {
   const sBarP = lag1(rollingStdPop(rBar, sigLen));
   return Float64Array.from(rBar, (rb, t) => {
@@ -183,7 +184,7 @@ export function normCdf(z) {
 }
 
 /**
- * Referência de ltfSigned (spec §4.1) avaliada sub-barra a sub-barra, com estado contínuo (como no contexto
+ * Referência de ltfSigned (METODOLOGIA §2.2–2.4) avaliada sub-barra a sub-barra, com estado contínuo (como no contexto
  * intrabar da TradingView): regra da vela com lado transportado (var dir = 1, nunca reiniciado; sem cotações
  * bid/ask) e BVC-Normal por intrabar com σ = desvio-padrão populacional de ΔC em sigLen sub-barras.
  * Devolve somas por barra do gráfico (per sub-barras por barra).

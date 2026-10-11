@@ -5,6 +5,11 @@ porquê. Segue o código de `src/price_cvd_normalizer.src.pine`. Onde a implemen
 investigação original ([research-dossier.md](research-dossier.md)), prevalece este documento; as diferenças estão
 resumidas na [secção 10](#10-diferenças-em-relação-ao-dossier).
 
+**Oráculo dos testes.** As fórmulas e regras deste documento são a referência contra a qual o código é verificado.
+Há duas reimplementações independentes: uma em JavaScript (`tests/lib/refz.mjs`), usada pelo harness de testes (ver
+[tests/README.md](../tests/README.md)), e outra em Python (guarda de gaps, escalas, D, RMS desfasado e gate), usada na
+validação com dados reais e mantida fora do repositório (ver [VALIDACAO.md](VALIDACAO.md), secção 3).
+
 **Estado das fontes.** As marcas usadas ao longo do texto vêm do dossier:
 
 | Marca | Significado |
@@ -57,7 +62,7 @@ de agressor da bolsa: o delta tem de ser estimado. A qualidade dessa estimativa 
 
 | Nível | Fonte | Acesso em Pine | Plano e cobertura |
 |---|---|---|---|
-| **Alta (3)** | Footprint: `footprint.delta()`, normalizado por `footprint.total_volume()` | `request.footprint()`, um único local de chamada | Premium/Ultimate [V]. Profundidade histórica não documentada. Classificado pela TradingView «com base na acção do preço intrabar» [V-sec], não pelas marcas de agressor |
+| **Alta (3)** | Footprint: delta = `footprint.delta()`; volume da barra para o NAR = `footprint.total_volume()` | `request.footprint()`, um único local de chamada | Premium/Ultimate [V]. Profundidade histórica não documentada. Classificado pela TradingView «com base na acção do preço intrabar» [V-sec], não pelas marcas de agressor |
 | **Alta (3)** | Intrabars «1T» com a regra das cotações e a regra da vela | `request.security_lower_tf(…, "1T", …)` | Ultimate [V-sec]. Limite de 100K/125K/200K intrabars, isto é, negócios: horas em futuros líquidos. Presença histórica de bid/ask **não verificada** |
 | **Alta (3)** | Intrabars «1S» com a regra da vela | idem, «1S» | Premium ou superior [V-sec]. Cerca de 28 h de cripto líquida com 100K [E] |
 | **Média (2)** | Intrabars de minutos (ou de segundos > 1, ou ticks > 1) com a regra da vela; qualquer intrabar com o classificador BVC | idem | Todos os planos. 100K minutos ≈ 69 dias 24/7 |
@@ -291,13 +296,14 @@ Takahashi [V]).
 
 ### 4.4 Costura da cobertura
 
-As barras mais antigas do que o limite de intrabars usam o BVC na barra: outra escala de delta e um ρ inflacionado
-(o delta é derivado do preço). Se as escalas congeladas na âncora actual vierem de uma janela que inclui barras de
+As barras mais antigas do que o limite de intrabars usam o BVC na barra: outra escala de delta e um ρ inflacionado (o
+delta é derivado do preço). Se as escalas congeladas na âncora actual vierem de uma janela que inclui barras de
 qualidade baixa, as linhas **reiniciam uma vez** na primeira barra cuja janela σ/ρ (as N barras anteriores) está toda
 em qualidade ≥ média. A tabela indica-o («reiniciada no início da cobertura»). O reinício acontece no máximo uma vez
-por entrada em dados finos e só se a escala congelada tiver sido estimada numa janela mista. Numa verificação em dados
-reais de 15 minutos com cobertura de 1S de 110 barras, antes desta regra, 90% das âncoras em curso tinham as escalas
-estimadas numa janela mista [E].
+por entrada em dados finos e só se a escala congelada tiver sido estimada numa janela mista. Em dados reais, com a
+cobertura de 1S de 100K intrabars (110 barras de 15 minutos, 330 de 5 minutos), a âncora diária activa na última barra
+tinha as escalas estimadas numa janela com barras sem intrabars em 88% dos casos em 15 minutos e em 20% em 5 minutos;
+o indicador reiniciou as linhas exactamente nesses casos ([VALIDACAO.md](VALIDACAO.md), secção 3.6) [E].
 
 ### 4.5 Porque as estatísticas não ancoram
 
@@ -374,8 +380,10 @@ $$
 
 O painel mostra C_t e P̂_t; opcionalmente P̂ é desenhado no gráfico principal. Com λσ, M2 é M1 reescalado para preço:
 a geometria é idêntica. É o formato da figura 1 de Evans e Lyons (2002) [V-sec]. Em dias de fluxo persistente num só
-sentido, P̂ pode afastar-se dezenas de por cento do preço (λ congelado na âncora): nos dados reais de 5 minutos, o
-afastamento entre o preço implícito e o fecho teve percentil 99 de 28% [E].
+sentido, P̂ pode afastar-se dezenas de por cento do preço (λ congelado na âncora). Nos dados reais da validação (λσ,
+delta verdadeiro), |P̂/C − 1| em 5 minutos teve percentil 99 de 33% e máximo de 44% na janela de 31 dias que contém
+esses dias, mas percentil 99 de 9% (máximo 12%) numa janela de 42 dias e de 9% (máximo 44%) em todo o histórico de 117
+dias; em 15 minutos, 7% (máximo 14%) ([VALIDACAO.md](VALIDACAO.md), secção 3.6) [E].
 
 ### 5.5 M3 — Unidades-σ em janela móvel
 
@@ -423,8 +431,10 @@ $$
 $$
 
 É só uma referência. O fluxo tem memória longa (o rácio de variâncias VR20 de u_d foi 1,30 em BTC real [E]) e a
-volatilidade intradiária varia: em dados reais de 5 minutos com âncora diária, a linha do fluxo saiu do cone em cerca
-de 17% das barras, em vez de ~4,6% [E].
+volatilidade intradiária varia. Em dados reais com âncora diária (117 dias), a linha do fluxo saiu do cone em 17% das
+barras em 5 minutos e em 10% em 15 minutos, em vez de ~4,6%, e o desvio RMS foi 2,3 e 1,5 vezes o do cone (1,8–2,8 nas
+duas janelas de 5 minutos da validação) [E]. O dossier previa um cone verdadeiro só 15–30% mais largo, a partir do
+VR20; a medição directa substitui essa estimativa (secção 10; [VALIDACAO.md](VALIDACAO.md), secção 3.6).
 
 ### 5.9 Porque não regredir nem correlacionar níveis
 
@@ -496,12 +506,13 @@ seu número. O valor actual nunca entra no próprio denominador.
 divergências persistentes: com M = 1000, a taxa de detecção de um episódio injectado foi 0,44 / 0,67 / 0,57 / 0,39 nas
 idades 0–20 / 20–100 / 100–200 / 200–400 barras [E].
 
-**Calibração provisória.** Enquanto n_t ≤ M a calibração é uma média expansiva de poucos valores efectivos (a soma K
-é sobreposta, com autocorrelação de ordem 1 de (K − 1)/K = 0,95): a tabela mostra «cal. n/M». Com menos de 20·K
-valores (cerca de 20 somas K independentes) o preenchimento e as colunas ficam limitados à intensidade abaixo do
-limiar. Os **alertas** de Z só disparam com pelo menos 2N valores de calibração (o aquecimento de 2N do dossier): em
-dados reais, com calibração provisória, |Z| passou o limiar cerca de 1,2–1,5 vezes mais do que com a calibração
-completa [E].
+**Calibração provisória.** Enquanto n_t ≤ M a calibração é uma média expansiva de poucos valores efectivos (a soma K é
+sobreposta, com autocorrelação de ordem 1 de (K − 1)/K = 0,95): a tabela mostra «cal. n/M». Com menos de 20·K valores
+(cerca de 20 somas K independentes) o preenchimento e as colunas ficam limitados à intensidade abaixo do limiar. Os
+**alertas** de Z só disparam com pelo menos 2N valores de calibração (o aquecimento de 2N do dossier): em dados reais,
+com 100 a 199 valores de calibração (o caso de 1S num gráfico de 5 minutos), P(|Z| ≥ 2) foi cerca de 1,3 vezes e P(|Z|
+≥ 3) 1,2–1,6 vezes o das mesmas barras com a calibração completa; o excesso desce para ~1,1 vezes com 200 a 399
+valores e ~1,05 com 400 ou mais ([VALIDACAO.md](VALIDACAO.md), secção 3.6) [E].
 
 ### 6.4 Condição sobre os dados
 
@@ -586,7 +597,12 @@ Candidatos comparados em BTCFDUSD real (delta verdadeiro) e numa simulação de 
 
 Na validação do código final em dados reais (secção 3 de [VALIDACAO.md](VALIDACAO.md)), com o delta verdadeiro e
 calibração completa, P(|Z| ≥ 2) foi 6,19% e 6,05% em duas janelas de 5 minutos e 5,35% em 15 minutos; P(|Z| ≥ 3) foi
-1,61%, 1,04% e 1,48% [E]. Combinado com o gate, um |Z| ≥ 2 nulo é raro (cerca de 0,04% das barras no dossier) [E].
+1,61%, 1,04% e 1,48% [E]. O dossier refere que, combinado com o gate, um |Z| ≥ 2 nulo cai para cerca de 0,04% das
+barras: essa nula é uma série em que o preço e o fluxo não estão relacionados (ρ ≈ 0), e aí o gate fica fechado em
+quase todas as barras (passagem nula de 0,25–0,5%, secção 6.5). Esse número mede a protecção do gate quando não há
+relação preço-fluxo, não a frequência de |Z| ≥ 2 em dados reais: com o gate aberto, a taxa base continua a ser cerca
+de 6% (P(|Z| ≥ 2 | gate aberto) = 6,27% e 6,45% nas duas janelas de 5 minutos, [VALIDACAO.md](VALIDACAO.md), secção
+3.3) [E].
 
 ### 6.9 λ e eficiência de impacto η (contexto, não gatilho)
 
@@ -783,6 +799,8 @@ difere nos pontos seguintes, todos deliberados:
 | Janela do evento | max(1, round(900/seg)) | Limitada a M/20 barras |
 | Tipo de volume | Aviso para «tick» e «n/a» | «n/a» é o normal fora de cripto e não leva aviso; o volume de ticks leva aviso e corta a qualidade |
 | Âncoras | Auto, RTH, 1D/1W/1M | Mais a sessão personalizada |
+| Cone nulo iid | Cone verdadeiro cerca de 15–30% mais largo, por causa da memória longa do fluxo (estimativa pelo VR20 = 1,30) | Mesmo cone; a dica e a documentação citam a medição directa em dados reais: desvio RMS 1,5 (15 min) a 2,3 vezes (5 min) o do cone, 10% e 17% de saídas em vez de 4,6% (secção 5.8) |
+| Divergência por pivots | Pivots no mesmo segmento de âncora | CVD contínuo e os dois pivots no mesmo regime de qualidade ≥ média; só a linha pontilhada do painel exige a mesma âncora (secção 8) |
 | Não implementado | Candidatos de exaustão; marca de reversão à média (Dickey-Fuller); transformação côncava do fluxo; λ assimétrico; alerta «gate aberto» | — |
 
 ---

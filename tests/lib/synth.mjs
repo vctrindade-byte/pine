@@ -7,7 +7,7 @@
 //   Δ_t = V_t · q̂_t   com q̂_t quantizado pelo canal de ms (o delta que o stub Pine vai ler)
 //   r_t = σr·(ρ0·Δ_t/σΔ + √(1−ρ0²)·ε_t)    [bps]        (impacto linear: corr(r, Δ) ≈ ρ0)
 //   O_t = C_{t−1},  C_t = O_t·exp(r_t/1e4),  H/L = max/min(O,C)·exp(±|ruído|)
-//   Opção gaps (spec §4.3): saltos de abertura O_t ≠ C_{t−1} — em ~jumpProb das barras |ln(O/C₋₁)| de jumpMin–jumpMax
+//   Opção gaps (METODOLOGIA §3.1): saltos de abertura O_t ≠ C_{t−1} — em ~jumpProb das barras |ln(O/C₋₁)| de jumpMin–jumpMax
 //   bps (≫ 3σ) e, em cada início de dia UTC, um gap pequeno N(0, daySd bps); a barra e todas as seguintes são
 //   multiplicadas pelo factor acumulado (o retorno próprio de cada barra, ln(C/O), não muda). PRNG próprio: as
 //   restantes séries são idênticas às geradas sem gaps.
@@ -150,7 +150,7 @@ export function generate(opts = {}) {
   return { bars, meta: { ...o, sigmaDeltaNominal } };
 }
 
-/** Saltos de abertura (spec §4.3): factor acumulado aplicado à barra do salto e a todas as seguintes. */
+/** Saltos de abertura (METODOLOGIA §3.1): factor acumulado aplicado à barra do salto e a todas as seguintes. */
 function applyGaps(bars, { seed = 9, jumpProb = 0.01, jumpMin = 60, jumpMax = 120, daySd = 3, after = 200 } = {}) {
   const rng = mulberry32(seed);
   const dayKey = (ms) => Math.floor(ms / 86400000);

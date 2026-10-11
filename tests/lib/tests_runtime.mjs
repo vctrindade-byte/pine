@@ -1,5 +1,5 @@
 // T0 auto-verificação do harness, T4 matriz de execução, T5 calibração nula, T6 detecção + auditoria exacta dos
-// eventos, T7 invariantes, T8 concordância com a referência JS (spec §5/§7), T9 motor de delta e tier, T10 LTF
+// eventos, T7 invariantes, T8 concordância com a referência JS (docs/METODOLOGIA.md §6/§7), T9 motor de delta e tier, T10 LTF
 // nativo, T11 timeframes/âncoras/qualidade.
 
 import { loadPineTS, pinetsVersion, runPine, labelBar, labelText, getPlot, maxJobs } from './pinets.mjs';
@@ -21,7 +21,7 @@ function defNum(target, varId, fallback) {
   return m && isF(Number(m.defval)) ? Number(m.defval) : fallback;
 }
 
-/** Parâmetros por omissão do alvo; ke/life/hqNeed como no indicador (spec §5/§7) para um gráfico de tfSec segundos. */
+/** Parâmetros por omissão do alvo; ke/life/hqNeed como no indicador (METODOLOGIA §6.4/§7.1) para um gráfico de tfSec segundos. */
 function params(target, tfSec = 300) {
   const N = defNum(target, 'nIn', 100), K = defNum(target, 'kIn', 20), M = defNum(target, 'mIn', 1000);
   const keRaw = Math.max(1, Math.round((defNum(target, 'evWinIn', 15) * 60) / tfSec));
@@ -221,7 +221,7 @@ function t6LowConfWanted(target) {
 }
 
 /**
- * Execução extra do T6: absorções com a divergência por pivots ligada (auditoria dos pivots, spec §7) e com o |zP|
+ * Execução extra do T6: absorções com a divergência por pivots ligada (auditoria dos pivots, METODOLOGIA §8) e com o |zP|
  * máximo do «travado» em 2.0 — aí a exclusão da classe CONFIRMADO (s·zP ≥ |ρ|·|zF|) deixa de ser inócua.
  */
 const T6_PIV_PINP = 2.0;
@@ -239,7 +239,7 @@ function t6PinWanted(target) {
 }
 
 const sgn = (x) => (x > 0 ? 1 : x < 0 ? -1 : 0);
-// alertcondition por título (spec §9, títulos revistos) → chave da auditoria
+// alertcondition por título (títulos do README, «Alertas») → chave da auditoria
 const ALERT_KEYS = [
   ['zUp', /^Z ≥/], ['zDn', /^Z ≤/], ['absB', /^Fluxo comprador absorvido/], ['absS', /^Fluxo vendedor absorvido/],
   ['pinB', /^Preço travado sob compras/], ['pinS', /^Preço travado sob vendas/],
@@ -252,7 +252,7 @@ const ALERT_KEYS = [
 const FULL_EVENTS_RE = /"Preço travado sob compras extremas"/;
 
 /**
- * Referência da divergência por pivots (spec §7, dossier §6.6) a partir do OHLC e dos plots do indicador (delta → CVD
+ * Referência da divergência por pivots (METODOLOGIA §8, dossier §6.6) a partir do OHLC e dos plots do indicador (delta → CVD
  * contínuo, σΔ desfasado, qualidade → hqRun). Pivots com a regra de empates do PineTS (à esquerda só um valor
  * estritamente maior desqualifica; à direita ≥ desqualifica). Devolve as barras de confirmação {top, bot}.
  */
@@ -293,7 +293,7 @@ const setMinus = (a, b) => { const B = new Set(b); return a.filter((x) => !B.has
 const sameSet = (a, b) => a.length === b.length && setMinus(a, b).length === 0 && setMinus(b, a).length === 0;
 
 /**
- * Auditoria EXACTA da camada de eventos (spec §7/§9): a partir dos plots do próprio indicador (zF, zP, gate,
+ * Auditoria EXACTA da camada de eventos (METODOLOGIA §6.7 e §7): a partir dos plots do próprio indicador (zF, zP, gate,
  * qualidade, Z) e do OHLC re-deriva as classes (absorvido ∪ travado, preço sem fluxo), a 1.ª barra de cada
  * aglomerado, a máquina de resolução (H0/L0 = máximo/mínimo em ke barras, vida em barras) e os alertas, e exige
  * igualdade com as etiquetas e os alertas emitidos. Usa os inputs por omissão (eventos e baixa confiança ligados).
@@ -433,7 +433,7 @@ export function auditEvents(tc, target, run, data, P, name, { piv = false } = {}
     else if (!arrowOk) { badRes++; if (ex.length < 3) ex.push(`@${l.x} seta da resolução errada (esperada ${arrowWant}): ${l.txt.replace(/\n/g, ' / ')}`); }
   }
   for (const l of pwfL) if (!(Pz[l.x] > 0 ? /↑/.test(l.txt) : /↓/.test(l.txt))) badPwfSide++;
-  // Confiança no próprio rótulo (spec §7): «(baixa conf.)» com qualidade média; senão «(cal. prov.)» com calibração
+  // Confiança no próprio rótulo (METODOLOGIA §7.4): «(baixa conf.)» com qualidade média; senão «(cal. prov.)» com calibração
   // fraca do zF/zP (< max(20·ke, 2N) valores); estilo oco (fundo com 65% de transparência → alfa 0x59) nos dois casos.
   let badConf = 0;
   const exConf = [];
@@ -468,7 +468,7 @@ export function auditEvents(tc, target, run, data, P, name, { piv = false } = {}
   const badAl = Object.keys(exp).filter((k) => !sameSet(got[k], exp[k])).map((k) => `${k}: ${got[k].length} vs ${exp[k].length}`);
   tc.check(badAl.length === 0, `${name}: alertcondition (por título) e alert() exactamente nas barras esperadas (1.º cruzamento / 1.ª barra de cada classe)`,
     badAl.join('; ') || Object.keys(exp).map((k) => `${k} ${exp[k].length}`).join(', '));
-  // Texto do estado (spec §5, quatro estados neutros) nas mensagens alert() dos cruzamentos de Z: tem de bater com o sinal
+  // Texto do estado (METODOLOGIA §6.6, quatro estados neutros) nas mensagens alert() dos cruzamentos de Z: tem de bater com o sinal
   // de Z e com a perna dominante (|F_K| > |P_K| → fluxo; senão preço), lidas dos plots P_K/F_K do próprio indicador.
   const pL = g('pLeg'), fL = g('fLeg');
   if (pL && fL) {
@@ -604,7 +604,7 @@ function cmpClose(tc, label, idx, got, want, rel = 1e-6, abs = 1e-7) {
 }
 
 /**
- * Âncoras esperadas (spec §6 + revisão 2): 1.ª barra, mudanças de calendário e — se o σ/ρ congelado na âncora veio de
+ * Âncoras esperadas (METODOLOGIA §4.2 e §4.4): 1.ª barra, mudanças de calendário e — se o σ/ρ congelado na âncora veio de
  * uma janela com barras de qualidade ≤ baixa — a 1.ª barra de qualidade ≥ média cuja janela σ/ρ desfasada (N barras)
  * está toda em qualidade ≥ média (reinício na costura da cobertura). sdP/srP: plots σΔ/σr do indicador.
  */
@@ -817,7 +817,7 @@ export async function t7Invariants(tc, target, { quick = false } = {}) {
 
 // ───────────────────────────── T8 ─────────────────────────────
 function t8Sets(quick) {
-  // jumpData: guarda de gaps de spec §4.3 (saltos de abertura ≫ 3σ e gaps pequenos no início do dia); a 2.ª variante
+  // jumpData: guarda de gaps de METODOLOGIA §3.1 (saltos de abertura ≫ 3σ e gaps pequenos no início do dia); a 2.ª variante
   // junta barras isoladas sem intrabars (BVC na barra com r = ln(C/O) nos gaps). Também no modo rápido (mutações).
   return [nullData(4500), gapData(), jumpData(), jumpData({ noIntrabarsProb: 0.003 }), ...(quick ? [] : [absorptionData({ count: 10 })])];
 }
@@ -859,7 +859,7 @@ export async function t8Reference(tc, target, { quick = false } = {}) {
     tc.check(onlyOne === 0, `${data.id}: Z definido exactamente nas mesmas barras que a referência (após ${warm}; hqNeed = ${ref.hqNeed})`,
       `${onlyOne} barras só num dos lados${firstOnly >= 0 ? ` (1.ª @${firstOnly})` : ''}`);
     tc.check(maxAbs <= 1e-6, `${data.id}: |Z Pine − Z ref| ≤ 1e-6 (aquecimento expansivo incluído)`, `máx ${fmt(maxAbs, 9)}`);
-    // zF/zP (eventos, spec §7): mesma definição de hqOk e RMS desfasado próprio
+    // zF/zP (eventos, METODOLOGIA §7.1): mesma definição de hqOk e RMS desfasado próprio
     for (const [role, refSer, name] of [['zF', ref.zF, 'zF'], ['zP', ref.zP, 'zP']]) {
       const pz = optRole(target, run, role);
       if (!pz) { tc.warn(`${name} (Data Window) não encontrado`); continue; }
@@ -954,7 +954,7 @@ export async function t9Engine(tc, target) {
   let c = compareSeries(intra, (t) => d1.values[t], (t) => stub[t], 1e-9, 1e-9);
   tc.check(c.nBad === 0, 'intrabar (stub): delta da barra = delta verdadeiro decodificado', `${c.nBad}/${c.n} (pior ${fmt(c.maxErr, 10)})`);
   c = compareSeries(noIntra, (t) => d1.values[t], (t) => barDelta[t], 1e-6, 1e-6);
-  tc.check(c.nBad === 0, 'barras sem intrabars: delta = BVC-Normal na barra (spec §4.3)', `${c.nBad}/${c.n} fora de 1e-6 (pior ${fmt(c.maxErr, 8)} @${c.worstIdx})`);
+  tc.check(c.nBad === 0, 'barras sem intrabars: delta = BVC-Normal na barra (METODOLOGIA §2.5)', `${c.nBad}/${c.n} fora de 1e-6 (pior ${fmt(c.maxErr, 8)} @${c.worstIdx})`);
   tc.check(zeroV.every((t) => d1.values[t] === 0), 'volume 0: delta = 0', `${zeroV.filter((t) => d1.values[t] !== 0).length}/${zeroV.length} divergentes`);
   const ni = get(r1, 'intrabars');
   if (ni) tc.check(intra.every((t) => ni.values[t] === STUB_K) && noIntra.every((t) => ni.values[t] === 0),
@@ -1033,7 +1033,7 @@ export async function t9Engine(tc, target) {
     const d5 = get(r5, 'delta'), t5 = get(r5, 'tier'), pl5 = get(r5, 'pLine');
     tc.check(noIntra.every((t) => !isF(d5.values[t])), 'fallback "Nenhum": delta na sem intrabars', `${noIntra.filter((t) => isF(d5.values[t])).length} finitos`);
     if (t5) tc.check(noIntra.every((t) => t5.values[t] === 0), 'fallback "Nenhum": tier 0 sem intrabars', `tiers: ${[...new Set(noIntra.map((t) => t5.values[t]))].join(',')}`);
-    if (pl5) tc.check(noIntra.every((t) => !isF(pl5.values[t])), 'fallback "Nenhum": linhas na quando não há delta (spec §6)', `${noIntra.filter((t) => isF(pl5.values[t])).length} finitos`, 'warn');
+    if (pl5) tc.check(noIntra.every((t) => !isF(pl5.values[t])), 'fallback "Nenhum": linhas na quando não há delta (METODOLOGIA §2.6)', `${noIntra.filter((t) => isF(pl5.values[t])).length} finitos`, 'warn');
   } else tc.skip('input fallbackIn inexistente (stand-in)');
 }
 

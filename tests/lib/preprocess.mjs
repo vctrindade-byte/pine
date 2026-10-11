@@ -1,7 +1,7 @@
 // Pré-processamento textual do script Pine ANTES de o entregar ao PineTS. O ficheiro do indicador nunca é
 // alterado em disco: o harness trabalha sobre uma cópia em memória.
 //
-// 1) Stub LTF: a linha única (spec §4.1)
+// 1) Stub LTF: a linha única do pedido intrabar (ver tests/README.md, «Stub do request.security_lower_tf»)
 //        [aCand, aBvc, aVol] = request.security_lower_tf(syminfo.tickerid, ltf, ltfSigned(100), ignore_invalid_timeframe = true)
 //    passa a
 //        [aCand, aBvc, aVol] = __ltfStub()
@@ -28,7 +28,7 @@ export function findLtfLine(src) {
   const code = stripComment(line);
   if (parenBalance(code) !== 0) throw new Error(`a linha LTF (linha ${idx + 1}) não fecha os parênteses na mesma linha física`);
   const total = (src.match(/request\.security_lower_tf\s*\(/g) || []).length;
-  if (total !== 1) throw new Error(`request.security_lower_tf aparece ${total} vezes (spec: exactamente 1 local de chamada)`);
+  if (total !== 1) throw new Error(`request.security_lower_tf aparece ${total} vezes (exige-se exactamente 1 local de chamada)`);
   return { index: idx, line };
 }
 
@@ -93,7 +93,7 @@ function parenBalance(code) {
 
 /**
  * Shims textuais. Cada entrada: { id, why, test: RegExp, apply(src) }.
- * Mantidos ao mínimo; o PineTS 0.11.0 já suporta os built-ins de spec.md que foram sondados
+ * Mantidos ao mínimo; o PineTS 0.11.0 já suporta os built-ins do indicador que foram sondados
  * (ver tests/lib/builtins.mjs e o teste T0). Um shim novo só deve ser adicionado quando a sonda
  * mostrar que o PineTS não implementa um built-in que o indicador usa.
  */

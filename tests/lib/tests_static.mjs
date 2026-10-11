@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { REPO, TARGETS, targetPath } from './harness.mjs';
-import { codeOnly, findLtfLine } from './preprocess.mjs';
+import { codeOnly, findLtfLine, stripComment } from './preprocess.mjs';
 
 const shortPath = (p) => (p.startsWith(REPO + '/') ? p.slice(REPO.length + 1) : p);
 
@@ -103,8 +103,12 @@ export function t3Static(tc, { targetKeys }) {
       tc.check(hits.length === 0, 'Standard: nenhuma ocorrência de "footprint" em código (fora de comentários/strings)',
         hits.length ? hits.slice(0, 5).map(([n, l]) => `L${n}: ${l.trim().slice(0, 80)}`).join(' | ') : '');
       tc.check(!/request\.footprint/.test(code), 'Standard: sem request.footprint()');
+      // Texto visível ao utilizador (strings: dicas, rótulos, tabela, alertas): a Standard não fala de footprint.
+      const txtHits = src.split('\n').map((l, i) => [i + 1, stripComment(l)]).filter(([, l]) => /footprint/i.test(l));
+      tc.check(txtHits.length === 0, 'Standard: nenhum texto visível (strings fora de comentários) menciona "footprint"',
+        txtHits.length ? txtHits.slice(0, 5).map(([n, l]) => `L${n}: ${l.trim().slice(0, 80)}`).join(' | ') : '');
       commonChecks(tc, 'Standard', src, code);
-      tc.check(/indicator\s*\(\s*"Preço × CVD Normalizado \[Order Flow\]"/.test(src), 'Standard: título do indicator() conforme spec §2', '', 'warn');
+      tc.check(/indicator\s*\(\s*"Preço × CVD Normalizado \[Order Flow\]"/.test(src), 'Standard: título do indicator() conforme o README (Edições)', '', 'warn');
     }
   }
   if (real.includes('fp')) {
@@ -114,7 +118,7 @@ export function t3Static(tc, { targetKeys }) {
       const n = (code.match(/request\.footprint\s*\(/g) || []).length;
       tc.check(n === 1, 'Footprint: exactamente 1 chamada request.footprint()', `${n} encontradas`);
       commonChecks(tc, 'Footprint', src, code);
-      tc.check(/indicator\s*\(\s*"Preço × CVD Normalizado \[Order Flow · Footprint\]"/.test(src), 'Footprint: título do indicator() conforme spec §2', '', 'warn');
+      tc.check(/indicator\s*\(\s*"Preço × CVD Normalizado \[Order Flow · Footprint\]"/.test(src), 'Footprint: título do indicator() conforme o README (Edições)', '', 'warn');
     }
   }
   if (targetKeys.includes('standin')) {
@@ -130,7 +134,7 @@ function commonChecks(tc, label, src, code, { banner = true } = {}) {
   try {
     const { index } = findLtfLine(src);
     tc.pass(`${label}: linha LTF única "[aCand, aBvc, aVol] = request.security_lower_tf(" numa só linha física`, `L${index + 1}`);
-  } catch (e) { tc.fail(`${label}: linha LTF conforme spec §4.1 (necessária para o stub do harness)`, e.message); }
+  } catch (e) { tc.fail(`${label}: linha LTF única (necessária para o stub do harness; tests/README.md)`, e.message); }
   const tags = lines.filter((l) => /\/\/\s*@(fp|std)\s*$/.test(l));
   if (banner) tc.check(tags.length === 0, `${label}: sem etiquetas // @fp / // @std remanescentes`, tags.length ? `${tags.length} linhas` : '');
   const n = (code.match(/\bindicator\s*\(/g) || []).length;

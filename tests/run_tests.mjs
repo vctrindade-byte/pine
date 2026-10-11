@@ -106,7 +106,7 @@ async function main() {
   await withTarget('T5', 'Calibração nula de Z', (tc, t) => t5Null(tc, t), { keys: statKeys });
   await withTarget('T6', 'Detecção de episódios injectados + auditoria exacta dos eventos e alertas', (tc, t) => t6Detection(tc, t, { quick: args.quick }), { keys: statKeys });
   await withTarget('T7', 'Invariantes (âncoras σ congeladas, preço implícito, janelas móveis, cone, deriva)', (tc, t) => t7Invariants(tc, t, { quick: args.quick }), { keys: statKeys });
-  await withTarget('T8', 'Concordância com a referência JS de spec §5/§7 (com quebras de qualidade)', (tc, t) => t8Reference(tc, t, { quick: args.quick }), { keys: statKeys });
+  await withTarget('T8', 'Concordância com a referência JS (METODOLOGIA §6/§7, com quebras de qualidade)', (tc, t) => t8Reference(tc, t, { quick: args.quick }), { keys: statKeys });
   await withTarget('T9', 'Motor de delta e tier de qualidade', (tc, t) => t9Engine(tc, t), { keys: statKeys });
   await withTarget('T10', 'LTF nativo sem stub (ltfSigned no contexto intrabar)', (tc, t) => t10NativeLtf(tc, t), { keys: statKeys });
   await withTarget('T11', 'Timeframes, âncoras e qualidade (1m/1h/D/W/1S, sessão personalizada)', (tc, t) => t11Timeframes(tc, t), { keys: statKeys });

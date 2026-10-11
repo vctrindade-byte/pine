@@ -14,11 +14,12 @@ geradas de `src/price_cvd_normalizer.src.pine`), salvo indicação em contrário
 |---|---|---|
 | As edições geradas coincidem com a fonte | `python3 tools/build.py --check` | OK (código de saída 0) |
 | Sintaxe das duas edições | pynescript 0.3.0 | 2/2 sem erros |
-| Built-ins usados existem na referência v6 | pesquisa nas cópias locais do manual | Standard 96/96; Footprint 99/99 (os 2 `footprint.*` só no segundo espelho) |
-| Limites da plataforma | contagem no código | 44 de 64 plots (pior caso 48); 1 ou 2 pedidos únicos de 40 |
-| Harness PineTS com dados sintéticos (T0–T11) | `npm test` | 612 verificações: 611 PASS, 1 WARN (T2 sem pynescript no caminho por omissão; PASS com `PINE_PYTHON`) |
-| Concordância com a referência Python em dados reais | `realdata.mjs` + `ref_z.py` | corr(Z Pine, Z Python) = 1,000000, \|ΔZ\| máx 7,3 × 10⁻¹⁰, gate igual em 100% das barras |
+| Built-ins usados existem na referência v6 | pesquisa nas cópias locais do manual | Standard 96/96 na 1.ª cópia; Footprint 97/99 na 1.ª cópia e 99/99 com o 2.º espelho (os 2 `footprint.*`) |
+| Limites da plataforma | contagem no código | 44 de 64 plots (pior caso 48); 1 ou 2 pedidos únicos de 40; 392/397 variáveis globais declaradas de 1000 (sem as temporárias do compilador) |
+| Harness PineTS com dados sintéticos (T0–T11) | `npm test` | 614 verificações, 614 PASS (com `PINE_PYTHON`; sem pynescript, o T2 dá 1 WARN em vez das 2 verificações de parse) |
+| Concordância com a referência Python em dados reais | scripts de validação fora do repositório (exportação, execução no PineTS e referência Python) | corr(Z Pine, Z Python) = 1,000000, \|ΔZ\| máx 7,3 × 10⁻¹⁰, gate igual em 100% das barras |
 | Calibração em dados reais (BTCFDUSD, delta verdadeiro) | idem | P(\|Z\| ≥ 2) = 6,19% / 6,05%; P(\|Z\| ≥ 3) = 1,61% / 1,04% (duas janelas de 5 min) |
+| Cone, preço implícito, calibração provisória, costura (secção 3.6) | edição Standard no PineTS, dados reais | saídas do cone 17% (5 min) e 10% (15 min) contra 4,6% iid; \|P̂/C − 1\| p99 9% em 117 dias (33% na janela de 31 dias); com calibração provisória (n < 200), \|Z\| ≥ 2 1,3 vezes mais frequente; reinício na costura em 88% (15 min) e 20% (5 min) dos casos |
 
 ---
 
@@ -28,22 +29,23 @@ geradas de `src/price_cvd_normalizer.src.pine`), salvo indicação em contrário
 ficheiros do repositório: sem diferenças.
 
 **Parse.** As duas edições foram analisadas pelo parser `pynescript` 0.3.0 (gramática ANTLR do Pine), sem cache: ambas
-sem erros (cerca de 144 s cada).
+sem erros (148 s e 48 s num só processo; o primeiro parse inclui o aquecimento da cache do ANTLR).
 
-**Verificações estáticas (T3).** A edição Standard não contém `footprint` em código (só em comentários e strings); a
-Footprint tem exactamente um `request.footprint()`; as duas têm um único `request.security_lower_tf` na linha exigida
-pelo harness, `//@version=6` na linha 1 e o aviso de ficheiro gerado na linha 2; não sobram etiquetas `// @fp` ou
-`// @std`.
+**Verificações estáticas (T3).** A edição Standard não contém `footprint` em código nem em texto visível ao utilizador
+(strings de dicas, rótulos, tabela e alertas; só em comentários); a Footprint tem exactamente um
+`request.footprint()`; as duas têm um único `request.security_lower_tf` na linha exigida pelo harness, `//@version=6`
+na linha 1 e o aviso de ficheiro gerado na linha 2; não sobram etiquetas `// @fp` ou `// @std`.
 
 **Built-ins.** Todos os identificadores com espaço de nomes usados em código (`ta.*`, `math.*`, `str.*`, `request.*`,
-`timeframe.*`, `chart.*`, `display.*`, …) foram procurados na cópia local da referência do Pine v6: 96/96 na Standard e
-97/99 na Footprint. Os dois em falta, `footprint.delta()` e `footprint.total_volume()`, não estão nessa cópia mas
-estão documentados no segundo espelho do manual (`pine-script-v6-md`: página do tipo `footprint` e exemplo do manual
-com `request.footprint()` → `footprint.total_volume()`/`footprint.delta()`, guardado por um ID não *na*). Uma revisão
-adversarial anterior, linha a linha contra a documentação (qualificadores, argumentos nomeados, ordem de declaração,
-quebras de linha), não encontrou bloqueadores de compilação; as construções introduzidas depois dessa revisão
-(`chart.is_standard`, `syminfo.prefix`, `precision` e `display` dependentes de inputs em `plot`/`hline`/`fill`,
-`timeframe.isticks`) foram verificadas contra as páginas correspondentes da referência.
+`timeframe.*`, `chart.*`, `display.*`, …) foram procurados em duas cópias locais da referência do Pine v6. Na 1.ª
+cópia: 96/96 na Standard e 97/99 na Footprint; com o 2.º espelho, 99/99 na Footprint. Os dois que só estão no 2.º
+espelho, `footprint.delta()` e `footprint.total_volume()`, estão documentados aí (`pine-script-v6-md`: página do tipo
+`footprint` e exemplo do manual com `request.footprint()` → `footprint.total_volume()`/`footprint.delta()`, guardado
+por um ID não *na*). Uma revisão adversarial anterior, linha a linha contra a documentação (qualificadores, argumentos
+nomeados, ordem de declaração, quebras de linha), não encontrou bloqueadores de compilação; as construções
+introduzidas depois dessa revisão (`chart.is_standard`, `syminfo.prefix`, `precision` e `display` dependentes de
+inputs em `plot`/`hline`/`fill`, `timeframe.isticks`) foram verificadas contra as páginas correspondentes da
+referência.
 
 **Limites** (manual do Pine, «Limitations»):
 
@@ -55,6 +57,7 @@ quebras de linha), não encontrou bloqueadores de compilação; as construções
 | Maior desfasamento ou comprimento de histórico | 2000 (`math.sum` com M) | 5000 |
 | Recuo dos desenhos | até 1050 barras; `max_bars_back(time, 1100)` | — |
 | Rótulos e linhas | `max_labels_count = 500`, `max_lines_count = 500` | 500 |
+| Variáveis no âmbito global | 392 declaradas na Standard e 397 na Footprint, mais as temporárias que o compilador cria (não contáveis fora da TradingView) | 1000 por âmbito |
 
 ---
 
@@ -63,18 +66,19 @@ quebras de linha), não encontrou bloqueadores de compilação; as construções
 O harness (`tests/`, ver [tests/README.md](../tests/README.md)) corre o código Pine das duas edições no PineTS 0.11.0
 sobre barras sintéticas com **delta verdadeiro conhecido**. O pedido intrabar é substituído, em memória, por um stub
 que devolve 5 intrabars por barra cuja soma é o delta verdadeiro; o T10 testa também o pedido intrabar nativo, sem
-stub. Os resultados são comparados com a especificação e com uma referência independente em JavaScript.
+stub. Os resultados são comparados com as fórmulas de [METODOLOGIA.md](METODOLOGIA.md), o oráculo dos testes, através
+de uma reimplementação independente em JavaScript (`tests/lib/refz.mjs`).
 
-Execução completa: `npm test`, 20 blocos de testes (T0–T3 uma vez; T4–T11 em cada edição), **612 verificações, 611
-PASS e 1 WARN**, código de saída 0, 348 s. O WARN é o T2 sem `pynescript` no Python por omissão; com
-`PINE_PYTHON` a apontar para um ambiente com `pynescript`, o T2 passa.
+Execução completa: `npm test` com `PINE_PYTHON` a apontar para um ambiente com `pynescript` 0.3.0, 20 blocos de testes
+(T0–T3 uma vez; T4–T11 em cada edição), **614 verificações, 614 PASS**, código de saída 0, 304 s. Sem `pynescript`, o
+T2 dá 1 WARN (parse não executado) em vez das 2 verificações de parse.
 
 | Teste | O que verifica | Resultado |
 |---|---|---|
 | T0 | O próprio harness: PineTS, canal do delta (erro ≤ 1/998 de V), `timeframe.in_seconds()`, `timeframe.change`, `session.isfirstbar`, built-ins presentes no PineTS (106) | 25/25 |
 | T1 | `tools/build.py --check` | 3/3 |
-| T2 | Parse com pynescript | PASS com `PINE_PYTHON` (WARN sem ele) |
-| T3 | Verificações estáticas (secção 1) | 17/17 |
+| T2 | Parse com pynescript | 2/2 com `PINE_PYTHON` (WARN sem ele) |
+| T3 | Verificações estáticas (secção 1), incluindo nenhum texto visível com «footprint» na Standard | 18/18 |
 | T4 | Matriz: 5 modos × {intrabar, só barras} × {âncora Auto, diária, semanal}, com as três vistas e os interruptores a rodar; na Footprint, também a fonte footprint | Standard 60/60; Footprint 12/12. Linhas finitas em 99,6–100% das barras depois do aquecimento; Z finito em 100% com intrabars e ausente (0%) com «Só barras do gráfico» |
 | T5 | Calibração nula: 4500 barras sem episódios, precisão 1S (qualidade alta) | P(\|Z\| ≥ 2) = **5,37%** (230/4281); P(\|Z\| ≥ 3) = **0,26%** (11/4281). Critérios: [2%, 12%] e < 3% |
 | T6 | Detecção de 10 absorções e 10 episódios de preço sem fluxo; auditoria **exacta** de rótulos, lados, «preço travado», resoluções e setas, de cada `alertcondition` e de cada `alert()`, re-derivados dos plots; precisão Auto (qualidade média, rótulos ocos); pivots ligados; série nula com \|zP\| máximo do «travado» = 3 (exclusão da classe CONFIRMADO) | 49/49 por edição. Z com o sinal esperado dentro do episódio em 10/10 absorções e 10/10 episódios de preço sem fluxo; absorção rotulada ou alertada em 10/10; P(\|Z\| ≥ 2) fora dos episódios 1,7% e 0,9%; pivots 41/41 topos e 44/44 fundos iguais à referência; todos os conjuntos de barras de rótulos e alertas iguais aos esperados |
@@ -87,9 +91,10 @@ PASS e 1 WARN**, código de saída 0, 348 s. O WARN é o T2 sem `pynescript` no 
 **Testes de mutação.** Para saber se o harness apanha erros reais, foram injectados erros plausíveis em cópias do
 código (por exemplo σ sem desfasamento, RMS que inclui a barra actual, sinal de Z trocado, σ não congelado, resoluções
 trocadas, sem winsorização, alertas sem histerese, «travado» sem a exclusão da classe CONFIRMADO, sem o reinício na
-costura, qualidade alta com o BVC). Na última ronda documentada, 11/11 mutações foram apanhadas, e numa ronda posterior
-mais 5/5. Continuam por apanhar, pelo menos, as mutações que só alteram texto da tabela (por exemplo, o NAR, mostrado
-com duas casas) e a da regra das cotações em «1T» (o PineTS não fornece cotações). A lista completa está em
+costura, qualidade alta com o BVC). Nas duas últimas rondas, 11/11 (revisão 3) e 5/5 (revisão 4: calibração mínima dos
+eventos e dos alertas de Z, aglomerados por lado, sufixo de confiança, volume de ticks) foram apanhadas. Continuam por
+apanhar, pelo menos, as mutações que só alteram texto da tabela (por exemplo, o NAR, mostrado com duas casas) e a da
+regra das cotações em «1T» (o PineTS não fornece cotações). A lista completa está em
 [tests/README.md](../tests/README.md).
 
 ---
@@ -104,8 +109,9 @@ com duas casas) e a da regra das cotações em «1T» (o PineTS não fornece cot
 - **Execução:** um script fora do repositório exporta uma janela de barras, codifica o delta verdadeiro no canal do
   harness (erro máximo de quantização 10⁻³ do volume) e corre a edição no PineTS com precisão 1S (qualidade alta), modo
   unidades-σ ancoradas e valores por omissão.
-- **Referência:** uma implementação Python independente da guarda de gaps, das escalas, de D, do RMS desfasado e do
-  gate (`ref_z.py`). A comparação começa na barra 320 (3N + K).
+- **Referência:** uma implementação Python independente (fora do repositório) da guarda de gaps, das escalas, de D,
+  do RMS desfasado e do gate, escrita a partir de [METODOLOGIA.md](METODOLOGIA.md). A comparação começa na barra 320
+  (3N + K).
 
 ### 3.2 Pine contra a referência Python
 
@@ -166,6 +172,64 @@ Corridas da edição Standard sobre os mesmos dados, a partir da barra 320, com 
 
 Estas contagens descrevem a frequência dos sinais, não o seu valor: as resoluções não foram testadas contra retornos
 seguintes nesta validação (ver [METODOLOGIA.md, secção 9](METODOLOGIA.md#9-interpretação-honesta)).
+
+### 3.6 Outras medições em dados reais
+
+Números citados nas dicas, no README e na metodologia, medidos com a edição Standard final no PineTS sobre os mesmos
+dados (delta verdadeiro, precisão 1S, qualidade alta, âncora Auto = diária, valores por omissão), salvo indicação em
+contrário.
+
+**Cone nulo iid e preço implícito.** Com σ_iid = √(2n(1 − max(ρ_a, 0))), o plot «Cone nulo +2σ» (cone ligado) menos a
+linha do preço vale 2σ_iid; há saída quando |F̃ − P̃| > 2σ_iid. Sob a hipótese iid, as saídas seriam ~4,6% e o RMS de
+(F̃ − P̃)/σ_iid seria 1. O preço implícito vem do modo «Preço implícito pelo fluxo» com λσ (plot «CVD em preço»),
+comparado com o fecho. Barras a partir da 320.
+
+| Dados | Barras | Saídas do cone | RMS de (F̃ − P̃)/σ_iid | \|P̂/C − 1\|: p50 / p95 / p99 / máx |
+|---|---|---|---|---|
+| 5 min, 0–8999 (31 dias) | 8650 | 15,7% | 2,82 | 0,7% / 5,9% / 33,1% / 43,5% |
+| 5 min, 20000–31999 (42 dias) | 11 639 | 12,1% | 1,81 | 0,7% / 4,9% / 9,1% / 12,1% |
+| 5 min, todo o histórico (117 dias) | 33 261 | 16,7% | 2,30 | 0,7% / 6,0% / 9,1% / 43,5% |
+| 15 min, todo o histórico (117 dias) | 10 799 | 9,9% | 1,46 | 0,6% / 3,7% / 6,9% / 14,3% |
+
+O dossier previa, a partir do rácio de variâncias VR20 = 1,30, um cone verdadeiro 15–30% mais largo (RMS de 1,15 a
+1,3). O desvio medido é maior (RMS de 1,5 a 2,8): o fluxo tem memória longa e a volatilidade intradiária varia em
+relação às escalas congeladas na âncora; a contribuição de cada factor não foi separada. A dica do cone e a
+metodologia ([METODOLOGIA.md](METODOLOGIA.md), secções 5.8 e 10) citam a medição directa. Os afastamentos grandes do
+preço implícito concentram-se em poucos dias de fluxo persistente: o percentil 99 de 33% da primeira janela cai para
+9% no histórico completo.
+
+**Calibração provisória.** Para simular a cobertura curta de 1S, cada corrida tem 400 barras sem intrabars (BVC na
+barra, qualidade baixa) seguidas de 1300 barras com 1S, a partir de pontos de reinício espalhados pelo histórico (123
+em 5 minutos, de 250 em 250 barras; 83 em 15 minutos, de 100 em 100). O RMS que calibra o Z recomeça em cada corrida.
+Cada Z provisório é comparado com o Z da corrida contínua de todo o histórico (calibração completa) **nas mesmas
+barras**; n é o número de valores de D anteriores no RMS (o Z aparece com n = N = 100). As corridas sobrepõem-se, por
+isso as barras não são independentes.
+
+| Dados | n | Barras | P(\|Z\| ≥ 2): provisório / completo (rácio) | P(\|Z\| ≥ 3): provisório / completo (rácio) |
+|---|---|---|---|---|
+| 5 min | 100–199 | 12 300 | 8,93% / 6,67% (1,34) | 1,92% / 1,21% (1,58) |
+| 5 min | 200–399 | 24 600 | 6,74% / 6,06% (1,11) | 1,22% / 1,12% (1,09) |
+| 5 min | 400–1000 | 73 923 | 6,88% / 6,59% (1,04) | 1,18% / 1,17% (1,01) |
+| 15 min | 100–199 | 8300 | 7,14% / 5,39% (1,33) | 1,43% / 1,23% (1,17) |
+| 15 min | 200–399 | 16 600 | 6,48% / 5,67% (1,14) | 1,44% / 1,24% (1,16) |
+| 15 min | 400–1000 | 49 883 | 6,03% / 5,75% (1,05) | 1,35% / 1,23% (1,10) |
+
+Com 1S num gráfico de 5 minutos (cerca de 330 barras cobertas), o Z só existe nas ~110 barras mais recentes, com n de
+100 a ~210: corresponde à linha «5 min, 100–199». Daí a regra de 2N valores para os alertas de Z e a intensidade
+limitada do preenchimento com menos de 20·K valores ([METODOLOGIA.md](METODOLOGIA.md), secção 6.3).
+
+**Janela mista na costura da cobertura.** Com 1S e o limite de 100K intrabars só as barras mais recentes têm intrabars
+(cerca de 330 em 5 minutos e 110 em 15 minutos). Para pontos finais espalhados pelo histórico, as barras anteriores à
+cobertura foram servidas sem intrabars (BVC na barra, qualidade baixa) e verificou-se se a janela σ/ρ da âncora diária
+activa na última barra (as N barras anteriores à âncora) incluía barras sem intrabars:
+
+| Dados | Pontos finais | Âncora activa com escalas de uma janela mista | Linhas reiniciadas pelo indicador («reiniciada no início da cobertura») |
+|---|---|---|---|
+| 15 min, cobertura de 110 barras | 75 | 88,0% | 88,0% (75/75 casos coincidem) |
+| 5 min, cobertura de 330 barras | 82 | 19,5% | 19,5% (82/82 casos coincidem) |
+
+Sem a regra da costura ([METODOLOGIA.md](METODOLOGIA.md), secção 4.4), essas âncoras escalariam o delta fino com um σ
+estimado, em parte ou no todo, sobre o delta derivado do preço.
 
 ---
 
@@ -230,6 +294,10 @@ Antes de publicar, numa conta TradingView (idealmente uma Premium ou Ultimate e 
     disparam uma vez por barra fechada.
 15. **Aspecto.** Temas claro e escuro: contraste das linhas, dos rótulos ocos e dos avisos da tabela; a tabela compacta
     não tapa as barras recentes em excesso.
+16. **Variáveis por âmbito.** O Pine admite 1000 variáveis por âmbito, incluindo as temporárias que o compilador cria.
+    O âmbito global declara 392 (Standard) e 397 (Footprint); as temporárias só se vêem na compilação. As duas edições
+    têm de guardar sem o erro «Script has too many local variables»; se aparecer, agrupar cálculos em funções (cada
+    função tem o seu próprio limite).
 
 ---
 

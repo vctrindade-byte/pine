@@ -7,7 +7,7 @@
 
 import { loadPineTS } from './pinets.mjs';
 
-/** Papéis semânticos → candidatos (varIds de spec.md e regex sobre o título PT). */
+/** Papéis semânticos → candidatos (varIds do indicador e regex sobre o título PT). */
 export const INPUT_ROLES = {
   srcIn: { varIds: ['srcIn'], title: [/fonte/i] },
   precIn: { varIds: ['precIn'], title: [/precis/i] },

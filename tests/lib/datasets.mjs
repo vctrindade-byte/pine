@@ -44,7 +44,7 @@ export function gapData(nBars = 4500, seed = 5, blocks = [[1500, 5], [3000, 30]]
 }
 
 /**
- * T8 (guarda de gaps, spec §4.3): série nula com saltos de abertura de 60–120 bps (≈ 8–15σ) em ~1% das barras e
+ * T8 (guarda de gaps, METODOLOGIA §3.1): série nula com saltos de abertura de 60–120 bps (≈ 8–15σ) em ~1% das barras e
  * gaps pequenos N(0, 3 bps) em cada início de dia UTC (session.isfirstbar tem de forçar r = ln(C/O) mesmo abaixo
  * de 3σ). Com noIntrabarsProb > 0, barras isoladas sem intrabars exercitam também o BVC na barra com gap.
  */

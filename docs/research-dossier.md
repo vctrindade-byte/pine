@@ -1,5 +1,5 @@
-> **Nota (PT-PT).** Este é o dossier de investigação original, em inglês, que serviu de base à especificação e ao
-> código do indicador «Preço × CVD Normalizado [Order Flow]». Fica aqui como documento de referência e histórico. Onde
+> **Nota (PT-PT).** Este é o dossier de investigação original, em inglês, que serviu de base ao código do indicador
+> «Preço × CVD Normalizado [Order Flow]». Fica aqui como documento de referência e histórico. Onde
 > a implementação final difere (regra dos níveis de qualidade, costura da cobertura, aglomerados de eventos, histerese
 > dos alertas, funcionalidades não implementadas, como os candidatos de exaustão, a marca de Dickey-Fuller e a
 > transformação côncava do fluxo), prevalece [METODOLOGIA.md](METODOLOGIA.md), em especial a secção 10. Os excertos de

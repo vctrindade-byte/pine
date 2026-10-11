@@ -7,9 +7,17 @@ __pycache__/
 # Relatórios e saídas dos testes
 tests/out/
 *.report.json
-# Dados de mercado nunca são versionados
+# Dados de mercado nunca são versionados (nenhum ficheiro de dados é necessário aos testes: são sintéticos)
 *.npz
+*.csv
+*.parquet
+*.feather
+*.h5
+# Registos e segredos locais
+*.log
+.env
 # SO / editores
 .DS_Store
+Thumbs.db
 .idea/
 .vscode/
