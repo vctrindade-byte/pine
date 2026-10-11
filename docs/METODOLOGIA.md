@@ -4,12 +4,15 @@ Este documento descreve, com as fórmulas exactas, o que o indicador «Preço ×
 porquê. Segue o código de `src/price_cvd_normalizer.src.pine`. Onde a implementação se afasta do dossier de
 investigação original ([research-dossier.md](research-dossier.md)), prevalece este documento; as diferenças estão
 resumidas na [secção 10](#10-diferenças-em-relação-ao-dossier). A auditoria externa ao indicador, com a nossa
-avaliação ponto a ponto, está em [AUDITORIA.md](AUDITORIA.md).
+avaliação ponto a ponto, está em [AUDITORIA.md](AUDITORIA.md); o estudo de eventos pré-registado dos sinais no
+S&P 500 (ES, MES, SPY), em [ESTUDO_SP500.md](ESTUDO_SP500.md).
 
 **Oráculo dos testes.** As fórmulas e regras deste documento são a referência contra a qual o código é verificado.
 Há duas reimplementações independentes: uma em JavaScript (`tests/lib/refz.mjs`), usada pelo harness de testes (ver
 [tests/README.md](../tests/README.md)), e outra em Python (guarda de gaps, escalas, D, RMS desfasado e gate), usada na
-validação com dados reais e mantida fora do repositório (ver [VALIDACAO.md](VALIDACAO.md), secção 3).
+validação com dados reais e mantida fora do repositório (ver [VALIDACAO.md](VALIDACAO.md), secção 3). Uma terceira,
+também em Python e completa (`research/sp500/code/engine.py`), reproduz todas as saídas usadas no estudo S&P 500 e foi
+comparada barra a barra com o script Pine real ([ESTUDO_SP500.md](ESTUDO_SP500.md), secção 4).
 
 **Estado das fontes.** As marcas usadas ao longo do texto vêm do dossier:
 
@@ -650,6 +653,11 @@ relação preço-fluxo, não a frequência de |Z| ≥ 2 em dados reais: com o ga
 de 6% (P(|Z| ≥ 2 | gate aberto) = 6,27% e 6,45% nas duas janelas de 5 minutos, [VALIDACAO.md](VALIDACAO.md), secção
 3.3) [E].
 
+No ES de 2008–2026, com delta de 1 minuto («Auto»), P(|Z| ≥ 2) foi 6,47% em 5 minutos (entre 6,1% e 6,8% em cada ano)
+e 5,75% em 15 minutos; P(|Z| ≥ 3), 1,43% e 0,98%. Como o RMS de D é calculado sobre toda a sessão Globex, |Z| ≥ 2 é
+mais frequente no horário regular (8,9% em 5 minutos) do que no electrónico (5,5%): o Z não está calibrado por hora do
+dia ([ESTUDO_SP500.md](ESTUDO_SP500.md), secção 6) [E].
+
 ### 6.9 λ e eficiência de impacto η (contexto, não gatilho)
 
 $$
@@ -771,6 +779,12 @@ compras absorvidas (10 com «preço travado»), 17 vendas absorvidas (2 travadas
 absorções resolveram-se em 21 continuações, 17 «segurou», 5 expirações e 2 substituições. Pormenores e outras
 configurações em [VALIDACAO.md](VALIDACAO.md).
 
+No ES de 5 minutos (2008–2026, 4 688 sessões, delta de 1 minuto), houve 3 003 absorções (0,64 por sessão), 953
+«travados» e 1 307 rótulos de preço sem fluxo; as absorções resolveram-se em 1 159 continuações, 1 477 «segurou», 311
+expirações e 56 substituições. Concentram-se na abertura e no fecho do mercado à vista; em 15 minutos, as que incluem
+o minuto de liquidação das 14:59 CT têm o lado decidido por essa única vela de 1 minuto
+([ESTUDO_SP500.md](ESTUDO_SP500.md), secção 13) [E].
+
 ---
 
 ## 8. Divergência por pivots
@@ -810,11 +824,11 @@ contra −1 a −2 bps com confirmação, diferença não significativa [E]. É 
 | Os incrementos do preço co-movem linearmente com o fluxo assinado, em tamanhos pequenos | Kyle [V]; Evans-Lyons [V]; Cont-Kukanov-Stoikov [V]; Chordia-Roll-Subrahmanyam 2002, R² ajustado 0,28 [V]; Silantyev (cripto) [V]; ρ próprio em BTC 0,39–0,45 [E] | **Forte** |
 | O impacto é côncavo e satura com fluxo grande | Hasbrouck [V]; Weber-Rosenow 0,48·Q^0,76 [V]; Plerou et al. [V]; Patzelt-Bouchaud [V]; lei da raiz quadrada [V] | **Forte** |
 | «Fluxo sem preço» é muitas vezes normal (contrafluxo de ordens limite, impacto transitório, memória longa dos sinais) | Bouchaud et al. 2004 [V]; Weber-Rosenow, factor 4 [V]; Lillo-Farmer [V]; Eisler et al. [V] | **Forte** (mecanismo) |
-| O desequilíbrio prevê volatilidade, não direcção | Easley-López de Prado-O'Hara 2012: o VPIN «não é um indicador direccional» [V] | Moderada |
+| O desequilíbrio prevê volatilidade, não direcção | Easley-López de Prado-O'Hara 2012: o VPIN «não é um indicador direccional» [V]; S&P 500 próprio: depois de 13 das 16 classes de sinais, movimento absoluto 0,06–0,18σ maior do que em barras emparelhadas, sem direcção [E] | Moderada |
 | A pressão de preço confirmada pelo fluxo reverte parcialmente | Chordia-Roll-Subrahmanyam 2002: coeficientes do desequilíbrio desfasado, condicionais ao actual, −4,56 e −5,83 [V]; Hendershott-Menkveld [V-sec]; cerca de 1/3 do impacto de metaordens reverte (Farmer et al. [V]); BTC próprio −4 a −5 bps [E] | **Moderada** |
-| Direcção depois de absorção | Nenhum teste revisto por pares. Kaniel-Liu e Brogaard et al. são incondicionais [V]. BTC, janelas de 15 min: absorvidas +7,7 bps (IC 1,5–13,7) e travadas +14,6 bps (IC 7,8–22,3), continuação a 30 min, na amostra, numa bolsa satélite; desaparece com delta estimado de 1 minuto [E]. Simulação: o sinal depende de quão informado está o lado passivo [E]. Osler [M]: a composição das ordens em repouso decide entre reversão e cascata | **Fraca / não validada**; no máximo uma ligeira continuação de curto prazo |
-| A exaustão bate a taxa base de reversão em novos extremos | Nenhum teste revisto por pares; BTC próprio: não significativo [E] | **Não estabelecida** |
-| O Z (K = 20) prevê retornos | Dados reais próprios: nulo depois do controlo de testes múltiplos [E]; Chordia-Roll-Subrahmanyam 2002: sem previsibilidade incondicional no dia seguinte [V] | **Nula** |
+| Direcção depois de absorção | Nenhum teste revisto por pares. Kaniel-Liu e Brogaard et al. são incondicionais [V]. BTC, janelas de 15 min: absorvidas +7,7 bps (IC 1,5–13,7) e travadas +14,6 bps (IC 7,8–22,3), continuação a 30 min, na amostra, numa bolsa satélite; desaparece com delta estimado de 1 minuto [E]. S&P 500 (ES 2008–2026, delta de 1 minuto, pré-registado): nula; as absorções foram seguidas do mesmo retorno que choques de fluxo confirmados (+0,015σ, p = 0,68) [E]. Simulação: o sinal depende de quão informado está o lado passivo [E]. Osler [M]: a composição das ordens em repouso decide entre reversão e cascata | **Fraca / não validada**; no máximo uma ligeira continuação de curto prazo; nula no S&P 500 com delta de 1 minuto |
+| A exaustão bate a taxa base de reversão em novos extremos | Nenhum teste revisto por pares; BTC próprio: não significativo [E]; S&P 500 próprio: divergências por pivots nulas (−0,010σ e +0,006σ aos 30 minutos) [E] | **Não estabelecida** |
+| O Z (K = 20) prevê retornos | Dados reais próprios: nulo depois do controlo de testes múltiplos [E]; S&P 500 próprio, pré-registado: alertas de Z, eventos, resoluções e pivots nulos (0 de 16 classes no ES, também no MES e no SPY) [E]; Chordia-Roll-Subrahmanyam 2002: sem previsibilidade incondicional no dia seguinte [V] | **Nula** |
 | A correlação de níveis ou o spread de z-scores «confirma» ou «diverge» | Regressão espúria [V]; Ernst-Shepp-Wyner [V]; Monte Carlo próprio [E] | **Inválida** |
 
 **Retornos seguintes: um nulo honesto [E].** Em dados reais não houve efeito robusto de nenhuma das pernas a H = K/2
@@ -833,11 +847,13 @@ mais de 64 células. **O Z é um medidor descritivo de divergência, não uma pr
   próprio ser informado (Kaniel-Liu; Brogaard et al.).
 - Em cripto, o CVD de uma só bolsa inclui fluxo específico dessa bolsa; a componente comum do volume assinado entre
   bolsas explica cerca de 80% dos retornos do BTC (Makarov e Schoar [V]).
-- A calibração assenta num par cripto à vista em 4 meses mais simulações. Futuros do CME (âncoras Globex e RTH),
-  acções e perpétuos líquidos não estão validados. Os limiares (gate 0,30, |Z| 2/3, K = 20, M = 1000, c = 4) têm base
-  teórica e são empiricamente razoáveis, mas não foram validados fora da amostra.
-- Os eventos e os cruzamentos de Z do código final não foram testados contra retornos seguintes, MFE/MAE, controlos e
-  custos. O plano de validação e o que dele já existe estão em [AUDITORIA.md](AUDITORIA.md), ponto (i).
+- A calibração assenta num par cripto à vista em 4 meses, em simulações e no S&P 500 (ES 2008–2026, MES, SPY, com
+  delta de 1 minuto). Acções individuais, perpétuos e FX não estão validados. Os limiares (gate 0,30, |Z| 2/3, K = 20,
+  M = 1000, c = 4) têm base teórica; no S&P 500 foram usados sem ajuste, como teste fora da amostra.
+- Os eventos e os cruzamentos de Z do código final foram testados no S&P 500 contra retornos seguintes, MFE/MAE,
+  controlos e custos, com o delta «Auto» da TradingView: nenhum valor direccional, antes ou depois de custos
+  ([ESTUDO_SP500.md](ESTUDO_SP500.md)). Com o fluxo verdadeiro ou com 1S, e noutros mercados, continuam por testar
+  ([AUDITORIA.md](AUDITORIA.md), ponto (i)).
 
 ---
 

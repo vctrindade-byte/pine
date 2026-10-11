@@ -13,6 +13,19 @@ tests/out/
 *.parquet
 *.feather
 *.h5
+*.dbn
+*.zst
+*.gz
+*.zip
+# Estudo S&P 500 (research/sp500): os dados de mercado e os ficheiros derivados barra a barra nunca são versionados
+# (o código também recusa escrevê-los dentro de uma árvore git). Só entram o código e as tabelas agregadas.
+research/sp500/**/raw/
+research/sp500/**/clean/
+research/sp500/**/work/
+research/sp500/**/features/
+research/sp500/**/validation/
+# Excepção: as tabelas agregadas dos resultados (contagens, médias, p-valores; sem preços nem séries por barra)
+!research/sp500/results/**/*.csv
 # Registos e segredos locais
 *.log
 .env

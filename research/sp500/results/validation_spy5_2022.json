@@ -1,0 +1,637 @@
+{
+ "n": 47885,
+ "warmup_bars": 420,
+ "flags": {
+  "hqOk": {
+   "pine_true": 47766,
+   "port_true": 47766,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "gapBar": {
+   "pine_true": 336,
+   "port_true": 336,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "noObs": {
+   "pine_true": 0,
+   "port_true": 0,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "zCalOk": {
+   "pine_true": 47566,
+   "port_true": 47566,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "gateOn": {
+   "pine_true": 43322,
+   "port_true": 43322,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "evWeak": {
+   "pine_true": 319,
+   "port_true": 319,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "absorbed": {
+   "pine_true": 236,
+   "port_true": 236,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "pinned": {
+   "pine_true": 100,
+   "port_true": 100,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "pwf": {
+   "pine_true": 101,
+   "port_true": 101,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "absNewCl": {
+   "pine_true": 180,
+   "port_true": 180,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "pinNewCl": {
+   "pine_true": 83,
+   "port_true": 83,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "pwfNewCl": {
+   "pine_true": 82,
+   "port_true": 82,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "newAbs": {
+   "pine_true": 180,
+   "port_true": 180,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "newPin": {
+   "pine_true": 83,
+   "port_true": 83,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "newPwf": {
+   "pine_true": 82,
+   "port_true": 82,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "resCont": {
+   "pine_true": 66,
+   "port_true": 66,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "resHeld": {
+   "pine_true": 71,
+   "port_true": 71,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "resExp": {
+   "pine_true": 38,
+   "port_true": 38,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "crossUp": {
+   "pine_true": 162,
+   "port_true": 162,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "crossDn": {
+   "pine_true": 224,
+   "port_true": 224,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "alZUp": {
+   "pine_true": 161,
+   "port_true": 161,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "alZDn": {
+   "pine_true": 223,
+   "port_true": 223,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "pivTop": {
+   "pine_true": 226,
+   "port_true": 226,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "pivBot": {
+   "pine_true": 240,
+   "port_true": 240,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "alPinO": {
+   "pine_true": 7,
+   "port_true": 7,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "hollow": {
+   "pine_true": 47885,
+   "port_true": 47885,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "resWeak": {
+   "pine_true": 1,
+   "port_true": 1,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "resLowC": {
+   "pine_true": 175,
+   "port_true": 175,
+   "mismatch": 0,
+   "first_bad": []
+  }
+ },
+ "series": {
+  "rBar": {
+   "defined_pine": 47885,
+   "defined_port": 47885,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 5.684341886080802e-14,
+   "max_rel": 3.6310001899463476e-16,
+   "max_abs_after_warmup": 5.684341886080802e-14,
+   "tol": 1e-06
+  },
+  "delta": {
+   "defined_pine": 47885,
+   "defined_port": 47885,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 2.3283064365386963e-10,
+   "max_rel": 6.426929640809219e-14,
+   "max_abs_after_warmup": 2.3283064365386963e-10,
+   "tol": 1e-06
+  },
+  "d": {
+   "defined_pine": 47885,
+   "defined_port": 47885,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 2.3283064365386963e-10,
+   "max_rel": 6.426929640809219e-14,
+   "max_abs_after_warmup": 2.3283064365386963e-10,
+   "tol": 1e-06
+  },
+  "r": {
+   "defined_pine": 47885,
+   "defined_port": 47885,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 5.684341886080802e-14,
+   "max_rel": 3.6310001899463476e-16,
+   "max_abs_after_warmup": 5.684341886080802e-14,
+   "tol": 1e-06
+  },
+  "srP": {
+   "defined_pine": 47785,
+   "defined_port": 47785,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "sdP": {
+   "defined_pine": 47785,
+   "defined_port": 47785,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 4.656612873077393e-10,
+   "max_rel": 1.043222617891933e-14,
+   "max_abs_after_warmup": 4.656612873077393e-10,
+   "tol": 1e-06
+  },
+  "rhoP": {
+   "defined_pine": 47785,
+   "defined_port": 47785,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "ur": {
+   "defined_pine": 47785,
+   "defined_port": 47785,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "ud": {
+   "defined_pine": 47785,
+   "defined_port": 47785,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "dStat": {
+   "defined_pine": 47766,
+   "defined_port": 47766,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "rmsD": {
+   "defined_pine": 47666,
+   "defined_port": 47666,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 4.99995600478087e-11,
+   "max_rel": 4.998457203697626e-11,
+   "max_abs_after_warmup": 4.99995600478087e-11,
+   "tol": 1e-06
+  },
+  "nCalD": {
+   "defined_pine": 47885,
+   "defined_port": 47885,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "mismatch": 0
+  },
+  "zDiv": {
+   "defined_pine": 47666,
+   "defined_port": 47666,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 2.3945911920009166e-10,
+   "max_rel": 6.35673724964826e-11,
+   "max_abs_after_warmup": 2.3945911920009166e-10,
+   "tol": 1e-06
+  },
+  "fE": {
+   "defined_pine": 47766,
+   "defined_port": 47766,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "pE": {
+   "defined_pine": 47766,
+   "defined_port": 47766,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "zF": {
+   "defined_pine": 47666,
+   "defined_port": 47666,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 3.45464989948141e-10,
+   "max_rel": 8.401475354942564e-11,
+   "max_abs_after_warmup": 3.45464989948141e-10,
+   "tol": 1e-06
+  },
+  "zP": {
+   "defined_pine": 47666,
+   "defined_port": 47666,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 2.757847283874071e-10,
+   "max_rel": 7.261858183898971e-11,
+   "max_abs_after_warmup": 2.757847283874071e-10,
+   "tol": 1e-06
+  },
+  "nCalE": {
+   "defined_pine": 47885,
+   "defined_port": 47885,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "mismatch": 0
+  },
+  "evSide": {
+   "defined_pine": 47885,
+   "defined_port": 47885,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "mismatch": 0
+  },
+  "resSide": {
+   "defined_pine": 47885,
+   "defined_port": 47885,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "mismatch": 0
+  },
+  "hqRun": {
+   "defined_pine": 47885,
+   "defined_port": 47885,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "mismatch": 0
+  },
+  "lqBar": {
+   "defined_pine": 47885,
+   "defined_port": 47885,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "mismatch": 0
+  },
+  "tier": {
+   "defined_pine": 47885,
+   "defined_port": 47885,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "mismatch": 0
+  },
+  "cvdC": {
+   "defined_pine": 47885,
+   "defined_port": 47885,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 4.470348358154297e-08,
+   "max_rel": 4.99269279248689e-13,
+   "max_abs_after_warmup": 4.470348358154297e-08,
+   "tol": 1e-06
+  },
+  "ph": {
+   "defined_pine": 4412,
+   "defined_port": 4412,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "pl": {
+   "defined_pine": 4344,
+   "defined_port": 4344,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "hiKe": {
+   "defined_pine": 47883,
+   "defined_port": 47883,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "loKe": {
+   "defined_pine": 47883,
+   "defined_port": 47883,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "pLeg": {
+   "defined_pine": 47766,
+   "defined_port": 47766,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "fLeg": {
+   "defined_pine": 47766,
+   "defined_port": 47766,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  }
+ },
+ "alertconditions": {
+  "alZUp": {
+   "pine": 161,
+   "port": 161,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alZDn": {
+   "pine": 223,
+   "port": 223,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alAbsB": {
+   "pine": 102,
+   "port": 102,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alAbsS": {
+   "pine": 77,
+   "port": 77,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alPinB": {
+   "pine": 47,
+   "port": 47,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alPinS": {
+   "pine": 35,
+   "port": 35,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alResCB": {
+   "pine": 42,
+   "port": 42,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alResCS": {
+   "pine": 23,
+   "port": 23,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alResHB": {
+   "pine": 34,
+   "port": 34,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alResHS": {
+   "pine": 37,
+   "port": 37,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alPwfU": {
+   "pine": 39,
+   "port": 39,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alPwfD": {
+   "pine": 42,
+   "port": 42,
+   "only_port": [],
+   "only_pine": []
+  },
+  "pivTop": {
+   "pine": 226,
+   "port": 226,
+   "only_port": [],
+   "only_pine": []
+  },
+  "pivBot": {
+   "pine": 240,
+   "port": 240,
+   "only_port": [],
+   "only_pine": []
+  }
+ },
+ "ok": true,
+ "alert_calls": 1207,
+ "labels": {
+  "labels": 500,
+  "expected": 728,
+  "complete_set_checked": false,
+  "bad": [],
+  "n_bad": 0,
+  "abs": {
+   "pine": 127,
+   "port": 180,
+   "only_pine": [],
+   "only_port": []
+  },
+  "pwf": {
+   "pine": 42,
+   "port": 82,
+   "only_pine": [],
+   "only_port": []
+  },
+  "top": {
+   "pine": 154,
+   "port": 226,
+   "only_pine": [],
+   "only_port": []
+  },
+  "bot": {
+   "pine": 177,
+   "port": 240,
+   "only_pine": [],
+   "only_port": []
+  },
+  "ok": true
+ },
+ "sessions_filter": "clean",
+ "contract_changes": null,
+ "gap_bars": 336,
+ "tag": "spy5_2022",
+ "inputs": {},
+ "inst": "spy",
+ "tf_min": 5,
+ "variant": "d_cr1m",
+ "prec": "auto",
+ "tier": 2,
+ "start": "2022-01-03 09:00:00+00:00",
+ "end": "2022-12-31 00:55:00+00:00",
+ "sessions": 251,
+ "ke": 3,
+ "life": 12,
+ "runtime_s": {
+  "bars": 4.38,
+  "pinets": NaN,
+  "pinets_internal_ms": 258677,
+  "port": 0.612
+ },
+ "channel_delta_vs_variant_max_rel": 0.0010020040080312498,
+ "stress": null,
+ "no_obs_bars": 0,
+ "tier_counts": {
+  "2": 47885
+ },
+ "event_counts_port": {
+  "new_abs": 180,
+  "new_pin": 83,
+  "new_pwf": 82,
+  "res_cont": 66,
+  "res_held": 71,
+  "res_exp": 38,
+  "sup": 5,
+  "al_z_up": 161,
+  "al_z_dn": 223,
+  "piv_top": 226,
+  "piv_bot": 240
+ },
+ "labels_pine": 500
+}

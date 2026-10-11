@@ -6,8 +6,9 @@ cálculos são causais: nenhum valor usa barras futuras.
 
 > **Aviso.** É uma ferramenta de análise estatística. Não é recomendação de investimento. As divergências e os eventos
 > que o indicador assinala são descritivos: em dados reais não se encontrou um efeito direccional robusto
-> (ver [Limitações](#limitações), [docs/METODOLOGIA.md](docs/METODOLOGIA.md) e o registo da auditoria externa em
-> [docs/AUDITORIA.md](docs/AUDITORIA.md)).
+> (ver [Limitações](#limitações), [docs/METODOLOGIA.md](docs/METODOLOGIA.md), o registo da auditoria externa em
+> [docs/AUDITORIA.md](docs/AUDITORIA.md) e o estudo de eventos no S&P 500 em
+> [docs/ESTUDO_SP500.md](docs/ESTUDO_SP500.md)).
 
 ## Índice
 
@@ -380,7 +381,9 @@ Regras:
 2. **O delta é estimado.** Mesmo o footprint é classificado pela TradingView a partir da acção do preço intrabar, não
    das marcas de agressor da bolsa. Com intrabars de 1 minuto ou só com as barras do gráfico, a estimativa depende em
    parte do próprio preço. A qualidade (alta, média, baixa) classifica a configuração dos dados; não garante o lado
-   agressor.
+   agressor. No ES com intrabars de 1 minuto, os eventos de fluxo coincidiram pouco com os do fluxo verdadeiro, e as
+   absorções cuja janela inclui o minuto de liquidação das 14:59 CT têm o lado decidido por uma só vela
+   ([docs/ESTUDO_SP500.md](docs/ESTUDO_SP500.md), secções 5 e 13).
 3. **O Z é um score empírico, não uma probabilidade.** As barras com |Z| ≥ 2 vêm em blocos (a soma K é sobreposta) e
    as caudas são mais pesadas do que as de uma normal; os limiares 2 e 3 são marcas convencionais. Os eventos de
    absorção são hipóteses sobre o mecanismo: o mesmo padrão pode vir de impacto côncavo, de fluxo previsível, de preço
@@ -388,10 +391,15 @@ Regras:
 4. **Não há vantagem direccional validada.** Nenhum estudo revisto por pares valida os retornos após divergência,
    absorção ou exaustão do CVD. Nos nossos testes com dados reais, o Z não previu retornos; houve só uma ligeira
    continuação após absorção de 15 minutos, numa só bolsa e na própria amostra, que desapareceu com delta estimado de
-   1 minuto. Os eventos do código final não foram testados contra retornos seguintes, MFE/MAE, controlos, custos nem
-   fora da amostra: o plano está em [docs/AUDITORIA.md](docs/AUDITORIA.md), ponto (i).
-5. **Calibração numa amostra estreita:** um par cripto à vista (BTCFDUSD, 4 meses) e simulações. Futuros do CME,
-   acções, perpétuos e FX não estão validados. Em cripto, o CVD de uma bolsa inclui fluxo próprio dessa bolsa.
+   1 minuto. No estudo pré-registado do S&P 500 (ES 2008–2026, MES e SPY, com o delta «Auto» da TradingView), nenhum
+   dos 16 tipos de sinal do código final previu o retorno a 5–60 minutos, o CVD não acrescentou direcção ao preço e
+   nenhuma regra simples ganhou depois de custos; os sinais marcaram só movimentos um pouco maiores, sem sentido
+   ([docs/ESTUDO_SP500.md](docs/ESTUDO_SP500.md)). Continuam por testar os sinais com o fluxo verdadeiro ou com 1S e
+   outros mercados ([docs/AUDITORIA.md](docs/AUDITORIA.md), ponto (i)).
+5. **Calibração em poucos mercados:** um par cripto à vista (BTCFDUSD, 4 meses), simulações e o S&P 500 (ES, MES e
+   SPY), onde |Z| ≥ 2 ocorreu em 6,1–6,8% das barras de 5 minutos em cada ano, mais no horário regular do que no
+   electrónico. Acções individuais, perpétuos e FX não estão validados. Em cripto, o CVD de uma bolsa inclui fluxo
+   próprio dessa bolsa.
 6. **Cobertura, planos e tempo real.** Os limites de intrabars encurtam o histórico de 1S/1T; o comportamento do
    footprint e de 1S/1T em cada plano não está totalmente documentado. Na barra em curso os valores são provisórios, e
    os dados intrabar e de footprint podem diferir entre histórico e tempo real.
@@ -417,6 +425,8 @@ tests/                                harness de testes (PineTS) e o seu README
 docs/METODOLOGIA.md                   derivação completa, estatística, eventos, interpretação, bibliografia
 docs/VALIDACAO.md                     o que foi validado, como, com que resultados, e o que falta verificar
 docs/AUDITORIA.md                     registo da auditoria externa: avaliação, provas, alterações e testes em falta
+docs/ESTUDO_SP500.md                  estudo de eventos pré-registado dos sinais no S&P 500 (ES, MES, SPY)
+research/sp500/                       código e resultados agregados desse estudo (sem dados de mercado)
 docs/research-dossier.md              dossier de investigação original (inglês)
 package.json, requirements-dev.txt    dependências dos testes (pinets 0.11.0; pynescript 0.3.0)
 ```
@@ -436,7 +446,9 @@ npm run test:quick                             # matriz reduzida
 Os testes correm o código Pine no PineTS (um runtime de Pine Script para Node) sobre barras sintéticas com delta
 verdadeiro conhecido e comparam o resultado com uma referência independente. O PineTS não é o compilador da
 TradingView. Pormenores em [tests/README.md](tests/README.md); resultados em [docs/VALIDACAO.md](docs/VALIDACAO.md).
-A validação com dados reais é feita fora do repositório: os dados de mercado nunca são versionados.
+A validação com dados reais é feita fora do repositório: os dados de mercado nunca são versionados. O código do
+estudo S&P 500 está em [research/sp500/](research/sp500/README.md), com as instruções para obter os dados e
+reproduzir cada tabela.
 
 ## Referências principais
 

@@ -6,8 +6,9 @@ com as provas, o que mudou e o que continua por testar.
 
 - As referências «l. n» são linhas de `src/price_cvd_normalizer.src.pine` na versão actual. Se se deslocarem, o
   identificador citado ao lado permite encontrá-las.
-- Os números medidos vêm de [VALIDACAO.md](VALIDACAO.md) e do dossier de investigação
-  ([research-dossier.md](research-dossier.md)). A marca [E] indica trabalho próprio, na própria amostra e não revisto
+- Os números medidos vêm de [VALIDACAO.md](VALIDACAO.md), do dossier de investigação
+  ([research-dossier.md](research-dossier.md)) e, para o S&P 500, do estudo de eventos em
+  [ESTUDO_SP500.md](ESTUDO_SP500.md). A marca [E] indica trabalho próprio, na própria amostra e não revisto
   por pares.
 - As fórmulas estão em [METODOLOGIA.md](METODOLOGIA.md); os testes, em [tests/README.md](../tests/README.md).
 
@@ -27,14 +28,16 @@ com as provas, o que mudou e o que continua por testar.
 | [(h)](#h-requisitos-da-plataforma-e-compilação) Requisitos da plataforma e compilação | Pine v6 | Risco provável (não verificado) | Por verificar na TradingView |
 | [(e)](#e-modos-de-visualização) Modos de visualização | Lógica | Risco provável (de leitura) | Sem alteração de código; documentado |
 | [(g)](#g-pivots-desenhados-no-pivot-conhecidos-r-barras-depois) Pivots desenhados no pivot, conhecidos R barras depois | Lógica | Risco provável (de backtest) | Documentado: um backtest entra na confirmação |
-| [(b)](#b-o-z-não-é-um-z-score-gaussiano) O Z não é um z-score gaussiano | Estatística | Risco provável (de leitura) | Concordamos: Z descrito como score empírico; frequência empírica por gráfico na dica do Z |
+| [(b)](#b-o-z-não-é-um-z-score-gaussiano) O Z não é um z-score gaussiano | Estatística | Risco provável (de leitura) | Concordamos: Z descrito como score empírico; frequência empírica por gráfico na dica do Z; medida também no ES (6,1–6,8% por ano) |
 | [(c)](#c-a-qualidade-é-uma-classificação-não-uma-garantia) A qualidade é uma classificação, não uma garantia | Estatística | Risco provável (de leitura) | Concordamos: documentado |
-| [(d)](#d-o-gate-ρ-pode-filtrar-regimes-relevantes) O gate ρ pode filtrar regimes relevantes | Estatística | Questão que exige backtest | Em aberto; hoje o gate não se desliga por completo |
-| [(f)](#f-os-eventos-de-absorção-são-hipóteses) Os eventos de absorção são hipóteses | Negociação | Questão que exige backtest | Concordamos: mecanismos alternativos listados |
-| [(i)](#i-plano-de-validação) Plano de validação | Negociação | Questão que exige backtest | Integridade e estabilidade em parte feitas; valor preditivo, MFE/MAE, controlos, custos e fora da amostra por fazer |
+| [(d)](#d-o-gate-ρ-pode-filtrar-regimes-relevantes) O gate ρ pode filtrar regimes relevantes | Estatística | Questão que exige backtest | Em aberto: no ES com o delta «Auto» o gate quase nunca fecha e as variantes são todas nulas; hoje o gate não se desliga por completo |
+| [(f)](#f-os-eventos-de-absorção-são-hipóteses) Os eventos de absorção são hipóteses | Negociação | Questão que exige backtest | Concordamos: mecanismos alternativos listados; no S&P 500 as absorções não acrescentam direcção ao preço |
+| [(i)](#i-plano-de-validação) Plano de validação | Negociação | Questão que exige backtest | Respondido para o S&P 500 com o delta «Auto»: resultado nulo depois de controlos e custos. Por fazer: fluxo verdadeiro ou 1S, dados servidos pela TradingView, outros mercados |
 
-Saldo: um erro de código confirmado e corrigido; o resto pede leitura cuidadosa ou testes que ainda não existem. Nada
-nesta auditoria nem na validação mostra uma vantagem negociável.
+Saldo: um erro de código confirmado e corrigido; o resto pede leitura cuidadosa ou testes. Nada nesta auditoria nem na
+validação mostra uma vantagem negociável. O estudo S&P 500 testou-o directamente no ES, no MES e no SPY: nenhuma das 16
+classes de sinais prevê o retorno seguinte, e nenhuma regra simples ganha depois de custos
+([ESTUDO_SP500.md](ESTUDO_SP500.md)).
 
 ---
 
@@ -233,7 +236,10 @@ E[Z²] ≈ 1, mas não torna o Z normal:
    primeira janela; 6,1%, 1,05% e 6,5% (gate aberto em 80,3%) na segunda, iguais à recontagem.
 
 **Por testar.** A frequência da dica é medida na própria amostra, sobre barras sobrepostas: não é um p-valor nem um
-nível de confiança. A calibração só foi medida num par cripto à vista.
+nível de confiança. A calibração foi medida num par cripto à vista e, com o delta de 1 minuto, no ES de 2008–2026:
+P(|Z| ≥ 2) de 6,47% em 5 minutos (6,1–6,8% em cada ano) e 5,75% em 15 minutos, P(|Z| ≥ 3) de 1,43% e 0,98%. No ES, o Z
+não está calibrado por hora do dia: |Z| ≥ 2 em 8,9% das barras do horário regular e 5,5% das do electrónico (5 minutos),
+porque o RMS é calculado sobre toda a sessão Globex ([ESTUDO_SP500.md](ESTUDO_SP500.md), secção 6).
 
 ### (c) A qualidade é uma classificação, não uma garantia
 
@@ -295,7 +301,16 @@ estados exigem o gate aberto.
   unidades de volatilidade a 5, 15, 30 e 60 minutos, MFE/MAE, controlos, custos), com correcção de testes múltiplos e
   confirmação fora da amostra.
 
-**O que mudou.** Nada.
+**O que mudou.** Nada no código.
+
+**Actualização: estudo S&P 500 (Outubro de 2026).** O desenho acima foi aplicado ao ES de 2008–2026, com o delta
+«Auto» (intrabars de 1 minuto): gate por omissão, sem gate (só qualidade), ρmin 0,20 e 0,40, nas mesmas barras e com a
+mesma calibração ([ESTUDO_SP500.md](ESTUDO_SP500.md), secção 9). As quatro variantes dão 0 de 16 classes significativas
+aos 30 minutos. A pergunta, porém, **não fica decidida**: no ES o ρ̂ é alto (mediana 0,71 em 5 minutos) e o gate está
+aberto em 98–99% das barras; desligá-lo acrescenta no máximo 27 eventos a uma classe. Na amostra de ticks, o ρ̂ com o
+delta verdadeiro foi igual ao do delta de 1 minuto em 5 minutos (0,69): no ES o gate fica aberto porque a relação entre
+preço e fluxo é forte. Fica por testar onde o gate fecha com frequência (SPY com horário alargado, aberto em 86% das
+barras; outros mercados; delta verdadeiro).
 
 ---
 
@@ -335,31 +350,60 @@ testados contra retornos seguintes. Na validação, 45 absorções em 31 dias re
 **O que mudou.** Nada no código: os rótulos já eram neutros e o «Viés direccional» é Neutro por omissão. A metodologia
 (secção 7.2) remete para esta lista.
 
-**Por testar.** Um estudo de eventos com controlos capazes de separar estas explicações (ponto (i)): delta verdadeiro
-contra estimado, eventos com e sem intrabars parados, fluxo de outras bolsas e dos derivados, horas de notícias.
+**Actualização: estudo S&P 500 (Outubro de 2026).** No ES de 2008–2026, com o delta «Auto», as absorções foram
+seguidas do mesmo retorno que choques de fluxo do mesmo tamanho confirmados pelo preço (diferença +0,015σ aos 30
+minutos, p = 0,68), e nenhuma classe difere de barras aleatórias emparelhadas depois da correcção de testes múltiplos
+([ESTUDO_SP500.md](ESTUDO_SP500.md), secções 7 e 8). Dois dos mecanismos da lista ficaram documentados no ES:
+
+- **Erro de classificação (5).** Na amostra de ticks de 2013, os eventos de fluxo do delta de 1 minuto recuperaram 2 de
+  15 eventos do delta verdadeiro (gráfico de 5 minutos).
+- **Artefacto de dados (8).** No gráfico de 15 minutos, 58% das absorções caem nas barras das 14:45 e 15:00 CT. Quando
+  a janela inclui o minuto de liquidação das 14:59 CT, o lado do evento coincide em 99,6–100% dos casos com o sinal
+  dessa única vela de 1 minuto, que a regra da vela atribui inteira a um lado. As pistas de continuação de 15 minutos
+  vêm desses eventos e desaparecem contra controlos da mesma barra do dia (secção 13 do estudo; análise post hoc).
+
+**Por testar.** Os mesmos eventos calculados com o fluxo verdadeiro ou com 1S numa amostra longa; eventos com e sem
+intrabars parados; fluxo de outras bolsas e dos derivados; horas de notícias.
 
 ### (i) Plano de validação
 
-**Classificação: questão que exige backtest.**
+**Classificação: questão que exige backtest. Respondida para o S&P 500 com o delta «Auto»; em aberto para o fluxo
+verdadeiro e para outros mercados.**
 
 **Ponto.** Um plano em etapas: integridade dos dados, estabilidade estatística, valor preditivo em unidades de
 volatilidade a 5, 15, 30 e 60 minutos, MFE/MAE, controlos, custos e validação fora da amostra.
 
-**Avaliação.** Concordamos com o plano. Mapeamento do que já existe e do que falta:
+**Avaliação.** Concordamos com o plano.
 
-| Etapa | O que já existe | O que falta |
-|---|---|---|
-| 1. Integridade dos dados | Regra das barras sem observação de fluxo e testes T10/T12 (ponto (a)); delta verdadeiro a partir das marcas de agressor; 20 barras de volume 0 em 33 696, nenhuma em falta; guarda de gaps (32 e 43 barras alteradas nas duas janelas); quantização do canal sem efeito (corr 1,00000); Pine igual à referência Python (\|ΔZ\| ≤ 7 × 10⁻¹⁰) | Dados servidos pela própria TradingView: volume *na* contra 0, cobertura de intrabars por plano, diferenças entre histórico e tempo real, footprint e 1S/1T contra o delta da bolsa; paridade com o CVD da TradingView (lista da secção 5 de [VALIDACAO.md](VALIDACAO.md), item 9) |
-| 2. Estabilidade estatística | P(\|Z\| ≥ 2) de 6,07–6,19% em duas janelas de 5 minutos e 5,35% em 15 minutos; excesso com calibração provisória (1,3–1,6 vezes); gate aberto em 80–90% das barras; ρ mediano 0,44–0,57 conforme a janela; efeito da remoção da deriva; delta estimado contra verdadeiro ([VALIDACAO.md](VALIDACAO.md), secções 3.3, 3.4 e 3.6) | Estabilidade ao longo do tempo (por exemplo, frequência mensal de \|Z\| ≥ 2 e do gate aberto); sensibilidade a N, K, M e c; outros mercados (futuros do CME, acções, perpétuos, FX) e outras bolsas |
-| 3. Valor preditivo em unidades de volatilidade (5/15/30/60 min) | Estudo de retornos seguintes do dossier (BTCFDUSD, 117 dias, t com agrupamento por dia, *bootstrap* em blocos de dias), com as definições de investigação: **Z nulo** a H = K/2 e H = K (retornos com sinal dentro de ±0,2σ√H; taxas de acerto 0,44–0,58; as células com \|t\| ≈ 2–2,5 não sobrevivem a Bonferroni sobre mais de 64 células); **ligeira continuação** depois da absorção com o delta verdadeiro (+7,7 e +14,6 bps a 30 minutos), que desapareceu com delta estimado de 1 minuto [E] | O mesmo estudo sobre as saídas do **código final** (cruzamentos de Z, eventos por classe, lado e qualidade, resoluções, pivots na confirmação), exportadas dos plots e alertas, com retornos em unidades de σr,t−1·√H a 5, 15, 30 e 60 minutos |
-| 4. MFE/MAE | Nada | Excursão favorável e adversa máximas, em unidades de volatilidade, por horizonte, classe e lado |
-| 5. Controlos | Só o nulo da calibração (série sintética do T5; ρ ≈ 0 no dossier) e, para os pivots, a taxa base de reversão em novos extremos de 4 h | Barras aleatórias emparelhadas por hora do dia e volatilidade; o mesmo padrão de preço sem a condição do fluxo; delta permutado entre dias (placebo); delta verdadeiro contra estimado; gate ligado contra desligado (ponto (d)) |
-| 6. Custos | Nada | Spread, comissões e derrapagem em bps por mercado, comparados com o efeito bruto; um efeito de 8–15 bps brutos é da ordem de grandeza dos custos de ida e volta em muitos mercados, e o resultado líquido não foi medido |
-| 7. Fora da amostra | Nada: os limiares (gate 0,30, \|Z\| 2/3, K = 20, M = 1000, c = 4) têm base teórica e foram escolhidos e medidos na mesma amostra | Parâmetros fixados antes do teste; divisão temporal (*walk-forward*) e outros mercados; todas as células relatadas, com correcção de testes múltiplos |
+**Resposta para o S&P 500 (Outubro de 2026).** O estudo [ESTUDO_SP500.md](ESTUDO_SP500.md) aplicou o plano ao ES
+(2008–2026, gráficos de 5 e 15 minutos), com o MES e o SPY como robustez: plano pré-registado, valores por omissão, o
+delta que a TradingView usa por omissão (intrabars de 1 minuto, qualidade média), todas as células relatadas e correcção
+de Benjamini-Hochberg. Resultado: **nulo**. Nenhuma das 16 classes de sinais prevê o retorno com sinal aos 30 minutos
+(0 de 16; menor p = 0,100); o CVD não acrescenta direcção ao preço nos gémeos nem nos controlos emparelhados; nenhuma
+regra ingénua tem resultado líquido positivo demonstrável depois de custos; o resultado repete-se no MES e no SPY. Os
+eventos são seguidos de movimentos um pouco maiores, sem sentido definido. O código e os resultados agregados estão em
+[research/sp500/](../research/sp500/README.md).
+
+Mapeamento do que já existe e do que falta:
+
+| Etapa | Antes do estudo S&P 500 | Estudo S&P 500 (ES, MES, SPY; delta «Auto») | O que falta |
+|---|---|---|---|
+| 1. Integridade dos dados | Regra das barras sem observação de fluxo e testes T10/T12 (ponto (a)); delta verdadeiro a partir das marcas de agressor; 20 barras de volume 0 em 33 696, nenhuma em falta; guarda de gaps (32 e 43 barras alteradas nas duas janelas); quantização do canal sem efeito (corr 1,00000); Pine igual à referência Python (\|ΔZ\| ≤ 7 × 10⁻¹⁰) | Ficheiros limpos com verificações (sem carimbos duplicados, preços fora da grelha nem barras OHLC incoerentes; sessões de rolagem e de contrato não dominante excluídas). Motor Python igual ao Pine real no PineTS em 12 fatias e 268 798 barras: todos os sinalizadores e alertas iguais, \|ΔZ\| ≤ 5 × 10⁻¹⁰, também com barras de volume 0, volume em falta e sem intrabars (secções 2 e 4) | Dados servidos pela própria TradingView: volume *na* contra 0, cobertura de intrabars por plano, diferenças entre histórico e tempo real, footprint e 1S/1T contra o delta da bolsa; paridade com o CVD da TradingView (lista da secção 5 de [VALIDACAO.md](VALIDACAO.md), item 9); semanas de rolagem do ES1! |
+| 2. Estabilidade estatística | P(\|Z\| ≥ 2) de 6,07–6,19% em duas janelas de 5 minutos e 5,35% em 15 minutos; excesso com calibração provisória (1,3–1,6 vezes); gate aberto em 80–90% das barras; ρ mediano 0,44–0,57 conforme a janela; efeito da remoção da deriva; delta estimado contra verdadeiro ([VALIDACAO.md](VALIDACAO.md), secções 3.3, 3.4 e 3.6) | P(\|Z\| ≥ 2) de 6,1–6,8% em cada ano de 2008–2026 (ES, 5 minutos; 5,75% em 15 minutos), igual nas duas metades; MES e SPY parecidos (5,7–6,4%). Não calibrado por hora do dia: 8,9% no horário regular contra 5,5% no electrónico. Gate aberto em 98–99% das barras, ρ̂ mediano 0,66–0,71 (secção 6) | Sensibilidade a N, K, M e c; calibração separada por horário; mercados fora do S&P 500 (perpétuos, FX, acções individuais) e outras bolsas |
+| 3. Valor preditivo em unidades de volatilidade (5/15/30/60 min) | Estudo de retornos seguintes do dossier (BTCFDUSD, 117 dias, t com agrupamento por dia, *bootstrap* em blocos de dias), com as definições de investigação: **Z nulo** a H = K/2 e H = K (retornos com sinal dentro de ±0,2σ√H; taxas de acerto 0,44–0,58; as células com \|t\| ≈ 2–2,5 não sobrevivem a Bonferroni sobre mais de 64 células); **ligeira continuação** depois da absorção com o delta verdadeiro (+7,7 e +14,6 bps a 30 minutos), que desapareceu com delta estimado de 1 minuto [E] | Resultado primário pré-registado (ES 5 minutos, 30 minutos, 16 classes, BH): **nulo**, 0 de 16 e nenhum p < 0,05 (médias de −0,13σ a +0,04σ). Também nulo a 5, 15 e 60 minutos, no gráfico de 15 minutos, com 1–2 minutos de latência, nas duas metades, no MES e no SPY (secções 7, 12 e 14) | Os mesmos sinais calculados com o fluxo verdadeiro ou com 1S, numa amostra longa (a amostra de ticks tem 15 sessões); outros mercados |
+| 4. MFE/MAE | Nada | Medidos por classe e horizonte: excursões 1,2 a 2 vezes as de uma barra qualquer e quase simétricas (MFE − MAE entre −0,19σ e +0,23σ aos 30 minutos) (secção 10) | Nada para o S&P 500 com o delta «Auto» |
+| 5. Controlos | Só o nulo da calibração (série sintética do T5; ρ ≈ 0 no dossier) e, para os pivots, a taxa base de reversão em novos extremos de 4 h | Gémeos condicionais (absorção contra choque de fluxo confirmado: +0,015σ, p = 0,68), controlos aleatórios emparelhados por ano, horário, bloco de 30 minutos, volatilidade e movimento recente do preço (0 de 18 em cada gráfico; também pela perna P_K e pela barra exacta), linha de base, gate ligado e desligado, delta verdadeiro contra estimado em 15 sessões (secções 5, 8 e 9). O CVD não acrescenta direcção ao preço | Delta permutado entre dias (placebo); horas de notícias; o gate onde ele fecha (ponto (d)) |
+| 6. Custos | Nada | ES: 0,325 pontos por ida e volta (limite inferior) e 0,575 de esforço; MES 0,45 pontos e SPY 0,015 dólares por acção (aproximados). Nenhuma das 224 regras ingénuas do ES tem resultado líquido positivo demonstrável (menor p unilateral 0,028; todos os q = 1,000) (secção 11) | Derrapagem medida por hora do dia (abertura, liquidação, reabertura) e por tamanho; filtro de notícias |
+| 7. Fora da amostra | Nada: os limiares (gate 0,30, \|Z\| 2/3, K = 20, M = 1000, c = 4) têm base teórica e foram escolhidos e medidos na mesma amostra | Valores por omissão fixados antes, na amostra cripto, e plano pré-registado: os 18,7 anos de ES são um teste fora da amostra dos parâmetros. Todas as células relatadas, com BH; metades, anos, MES e SPY (que têm o mesmo activo subjacente) | Mercados independentes do S&P 500; dados posteriores a Setembro de 2026 para confirmar qualquer hipótese gerada pelo estudo (por exemplo, a reversão depois das resoluções «continuação») |
 
 Regras para qualquer estudo futuro: usar só barras fechadas; entrar no fecho da barra do sinal (pivots na
 confirmação, ponto (g)); não usar a resolução nem a cor dos rótulos como informação de entrada; medir em unidades de
 volatilidade; agrupar os erros por dia; relatar também os resultados nulos.
 
-**O que mudou.** Nada no código. Até haver estes resultados, o indicador é um medidor descritivo da relação entre o
-preço e o fluxo, não um sistema de negociação ([METODOLOGIA.md](METODOLOGIA.md), secção 9).
+**O que mudou.** Nada no código do indicador. Foram acrescentados o estudo S&P 500 ([ESTUDO_SP500.md](ESTUDO_SP500.md))
+e o seu código e resultados agregados ([research/sp500/](../research/sp500/README.md)), sem os dados de mercado. As
+alterações ao indicador que o estudo sugere ficam por decidir: assinalar ou suprimir as absorções e os «travados» cuja
+janela inclui o minuto de liquidação das 14:59 CT, expirar as absorções pendentes no fim da sessão (ou marcar as
+resoluções causadas pelo salto da reabertura) e calibrar o Z separadamente por horário. O indicador continua a ser um
+medidor descritivo da relação entre o preço e o fluxo, não um sistema de negociação ([METODOLOGIA.md](METODOLOGIA.md),
+secção 9): no S&P 500, com o delta «Auto», os seus sinais não têm valor direccional demonstrável.

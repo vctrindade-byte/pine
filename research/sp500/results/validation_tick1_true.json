@@ -1,0 +1,637 @@
+{
+ "n": 19992,
+ "warmup_bars": 420,
+ "flags": {
+  "hqOk": {
+   "pine_true": 19873,
+   "port_true": 19873,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "gapBar": {
+   "pine_true": 15,
+   "port_true": 15,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "noObs": {
+   "pine_true": 0,
+   "port_true": 0,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "zCalOk": {
+   "pine_true": 19673,
+   "port_true": 19673,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "gateOn": {
+   "pine_true": 18936,
+   "port_true": 18936,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "evWeak": {
+   "pine_true": 419,
+   "port_true": 419,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "absorbed": {
+   "pine_true": 42,
+   "port_true": 42,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "pinned": {
+   "pine_true": 14,
+   "port_true": 14,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "pwf": {
+   "pine_true": 17,
+   "port_true": 17,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "absNewCl": {
+   "pine_true": 18,
+   "port_true": 18,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "pinNewCl": {
+   "pine_true": 5,
+   "port_true": 5,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "pwfNewCl": {
+   "pine_true": 6,
+   "port_true": 6,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "newAbs": {
+   "pine_true": 18,
+   "port_true": 18,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "newPin": {
+   "pine_true": 5,
+   "port_true": 5,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "newPwf": {
+   "pine_true": 6,
+   "port_true": 6,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "resCont": {
+   "pine_true": 6,
+   "port_true": 6,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "resHeld": {
+   "pine_true": 11,
+   "port_true": 11,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "resExp": {
+   "pine_true": 1,
+   "port_true": 1,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "crossUp": {
+   "pine_true": 78,
+   "port_true": 78,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "crossDn": {
+   "pine_true": 73,
+   "port_true": 73,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "alZUp": {
+   "pine_true": 78,
+   "port_true": 78,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "alZDn": {
+   "pine_true": 73,
+   "port_true": 73,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "pivTop": {
+   "pine_true": 83,
+   "port_true": 83,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "pivBot": {
+   "pine_true": 74,
+   "port_true": 74,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "alPinO": {
+   "pine_true": 1,
+   "port_true": 1,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "hollow": {
+   "pine_true": 419,
+   "port_true": 419,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "resWeak": {
+   "pine_true": 0,
+   "port_true": 0,
+   "mismatch": 0,
+   "first_bad": []
+  },
+  "resLowC": {
+   "pine_true": 0,
+   "port_true": 0,
+   "mismatch": 0,
+   "first_bad": []
+  }
+ },
+ "series": {
+  "rBar": {
+   "defined_pine": 19992,
+   "defined_port": 19992,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 1.7763568394002505e-15,
+   "max_rel": 2.9327650521886965e-16,
+   "max_abs_after_warmup": 1.7763568394002505e-15,
+   "tol": 1e-06
+  },
+  "delta": {
+   "defined_pine": 19992,
+   "defined_port": 19992,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 1.000444171950221e-10,
+   "max_rel": 2.896789193467e-14,
+   "max_abs_after_warmup": 1.000444171950221e-10,
+   "tol": 1e-06
+  },
+  "d": {
+   "defined_pine": 19992,
+   "defined_port": 19992,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 1.000444171950221e-10,
+   "max_rel": 2.896789193467e-14,
+   "max_abs_after_warmup": 1.000444171950221e-10,
+   "tol": 1e-06
+  },
+  "r": {
+   "defined_pine": 19992,
+   "defined_port": 19992,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 1.7763568394002505e-15,
+   "max_rel": 2.9327650521886965e-16,
+   "max_abs_after_warmup": 1.7763568394002505e-15,
+   "tol": 1e-06
+  },
+  "srP": {
+   "defined_pine": 19892,
+   "defined_port": 19892,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "sdP": {
+   "defined_pine": 19892,
+   "defined_port": 19892,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 1.000444171950221e-10,
+   "max_rel": 4.887786152009464e-13,
+   "max_abs_after_warmup": 1.000444171950221e-10,
+   "tol": 1e-06
+  },
+  "rhoP": {
+   "defined_pine": 19892,
+   "defined_port": 19892,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "ur": {
+   "defined_pine": 19892,
+   "defined_port": 19892,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "ud": {
+   "defined_pine": 19892,
+   "defined_port": 19892,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "dStat": {
+   "defined_pine": 19873,
+   "defined_port": 19873,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "rmsD": {
+   "defined_pine": 19773,
+   "defined_port": 19773,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 4.999967107011116e-11,
+   "max_rel": 4.999967107011116e-11,
+   "max_abs_after_warmup": 4.999967107011116e-11,
+   "tol": 1e-06
+  },
+  "nCalD": {
+   "defined_pine": 19992,
+   "defined_port": 19992,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "mismatch": 0
+  },
+  "zDiv": {
+   "defined_pine": 19773,
+   "defined_port": 19773,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 3.2082159151514134e-10,
+   "max_rel": 7.52183995157574e-11,
+   "max_abs_after_warmup": 3.2082159151514134e-10,
+   "tol": 1e-06
+  },
+  "fE": {
+   "defined_pine": 19873,
+   "defined_port": 19873,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "pE": {
+   "defined_pine": 19873,
+   "defined_port": 19873,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "zF": {
+   "defined_pine": 19773,
+   "defined_port": 19773,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 2.2036150681969957e-10,
+   "max_rel": 5.283185367107657e-11,
+   "max_abs_after_warmup": 2.2036150681969957e-10,
+   "tol": 1e-06
+  },
+  "zP": {
+   "defined_pine": 19773,
+   "defined_port": 19773,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 3.256275249441387e-10,
+   "max_rel": 8.435884038849871e-11,
+   "max_abs_after_warmup": 3.256275249441387e-10,
+   "tol": 1e-06
+  },
+  "nCalE": {
+   "defined_pine": 19992,
+   "defined_port": 19992,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "mismatch": 0
+  },
+  "evSide": {
+   "defined_pine": 19992,
+   "defined_port": 19992,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "mismatch": 0
+  },
+  "resSide": {
+   "defined_pine": 19992,
+   "defined_port": 19992,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "mismatch": 0
+  },
+  "hqRun": {
+   "defined_pine": 19992,
+   "defined_port": 19992,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "mismatch": 0
+  },
+  "lqBar": {
+   "defined_pine": 19992,
+   "defined_port": 19992,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "mismatch": 0
+  },
+  "tier": {
+   "defined_pine": 19992,
+   "defined_port": 19992,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "mismatch": 0
+  },
+  "cvdC": {
+   "defined_pine": 19992,
+   "defined_port": 19992,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 1.0186340659856796e-10,
+   "max_rel": 1.256927056241924e-11,
+   "max_abs_after_warmup": 1.0186340659856796e-10,
+   "tol": 1e-06
+  },
+  "ph": {
+   "defined_pine": 1735,
+   "defined_port": 1735,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "pl": {
+   "defined_pine": 1733,
+   "defined_port": 1733,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "hiKe": {
+   "defined_pine": 19978,
+   "defined_port": 19978,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "loKe": {
+   "defined_pine": 19978,
+   "defined_port": 19978,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "pLeg": {
+   "defined_pine": 19873,
+   "defined_port": 19873,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  },
+  "fLeg": {
+   "defined_pine": 19873,
+   "defined_port": 19873,
+   "na_mismatch": 0,
+   "first_na_bad": [],
+   "max_abs": 0.0,
+   "max_rel": 0.0,
+   "max_abs_after_warmup": 0.0,
+   "tol": 1e-06
+  }
+ },
+ "alertconditions": {
+  "alZUp": {
+   "pine": 78,
+   "port": 78,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alZDn": {
+   "pine": 73,
+   "port": 73,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alAbsB": {
+   "pine": 5,
+   "port": 5,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alAbsS": {
+   "pine": 13,
+   "port": 13,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alPinB": {
+   "pine": 3,
+   "port": 3,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alPinS": {
+   "pine": 2,
+   "port": 2,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alResCB": {
+   "pine": 2,
+   "port": 2,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alResCS": {
+   "pine": 4,
+   "port": 4,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alResHB": {
+   "pine": 2,
+   "port": 2,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alResHS": {
+   "pine": 9,
+   "port": 9,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alPwfU": {
+   "pine": 4,
+   "port": 4,
+   "only_port": [],
+   "only_pine": []
+  },
+  "alPwfD": {
+   "pine": 2,
+   "port": 2,
+   "only_port": [],
+   "only_pine": []
+  },
+  "pivTop": {
+   "pine": 83,
+   "port": 83,
+   "only_port": [],
+   "only_pine": []
+  },
+  "pivBot": {
+   "pine": 74,
+   "port": 74,
+   "only_port": [],
+   "only_pine": []
+  }
+ },
+ "ok": true,
+ "alert_calls": 344,
+ "labels": {
+  "labels": 181,
+  "expected": 181,
+  "complete_set_checked": true,
+  "bad": [],
+  "n_bad": 0,
+  "abs": {
+   "pine": 18,
+   "port": 18,
+   "only_pine": [],
+   "only_port": []
+  },
+  "pwf": {
+   "pine": 6,
+   "port": 6,
+   "only_pine": [],
+   "only_port": []
+  },
+  "top": {
+   "pine": 83,
+   "port": 83,
+   "only_pine": [],
+   "only_port": []
+  },
+  "bot": {
+   "pine": 74,
+   "port": 74,
+   "only_pine": [],
+   "only_port": []
+  },
+  "ok": true
+ },
+ "sessions_filter": "clean",
+ "contract_changes": 1,
+ "gap_bars": 15,
+ "tag": "tick1_true",
+ "inputs": {},
+ "inst": "es_tick",
+ "tf_min": 1,
+ "variant": "d_true",
+ "prec": "s1",
+ "tier": 3,
+ "start": "2013-09-01 22:00:00+00:00",
+ "end": "2013-09-20 21:14:00+00:00",
+ "sessions": 15,
+ "ke": 15,
+ "life": 60,
+ "runtime_s": {
+  "bars": 1.9,
+  "pinets": NaN,
+  "pinets_internal_ms": 75073,
+  "port": 0.264
+ },
+ "channel_delta_vs_variant_max_rel": 0.0010020040125000018,
+ "stress": null,
+ "no_obs_bars": 0,
+ "tier_counts": {
+  "3": 19992
+ },
+ "event_counts_port": {
+  "new_abs": 18,
+  "new_pin": 5,
+  "new_pwf": 6,
+  "res_cont": 6,
+  "res_held": 11,
+  "res_exp": 1,
+  "sup": 0,
+  "al_z_up": 78,
+  "al_z_dn": 73,
+  "piv_top": 83,
+  "piv_bot": 74
+ },
+ "labels_pine": 181
+}
